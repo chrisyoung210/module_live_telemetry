@@ -1,6 +1,5 @@
 use crate::error::{TelemetryError, TelemetryResult};
 use crate::types::ControlSample;
-use crate::types::RawPageSample;
 
 pub const ACC_STATUS_OFF: i32 = 0;
 pub const ACC_STATUS_REPLAY: i32 = 1;
@@ -110,85 +109,6 @@ impl AccSharedMemoryReader {
     #[cfg(not(windows))]
     pub fn session_info(&self) -> AccSessionInfo {
         AccSessionInfo::default()
-    }
-
-    #[cfg(windows)]
-    pub fn raw_page_layout() -> (usize, usize, usize, usize, usize, usize, usize, usize) {
-        let (physics_fields, graphics_fields, static_fields, total_fields) =
-            Self::raw_field_counts();
-        (
-            std::mem::size_of::<SPageFilePhysicsControls>(),
-            std::mem::size_of::<SPageFileGraphicsRaw>(),
-            std::mem::size_of::<SPageFileStaticIdentity>(),
-            physics_fields,
-            graphics_fields,
-            static_fields,
-            total_fields,
-            3,
-        )
-    }
-
-    #[cfg(not(windows))]
-    pub fn raw_page_layout() -> (usize, usize, usize, usize, usize, usize, usize, usize) {
-        (0, 0, 0, 0, 0, 0, 0, 0)
-    }
-
-    #[cfg(windows)]
-    pub fn raw_page_sizes(&self) -> (usize, usize, usize) {
-        (
-            std::mem::size_of::<SPageFilePhysicsControls>(),
-            std::mem::size_of::<SPageFileGraphicsRaw>(),
-            std::mem::size_of::<SPageFileStaticIdentity>(),
-        )
-    }
-
-    #[cfg(not(windows))]
-    pub fn raw_page_sizes(&self) -> (usize, usize, usize) {
-        (0, 0, 0)
-    }
-
-    #[cfg(windows)]
-    pub fn raw_field_counts() -> (usize, usize, usize, usize) {
-        (200, 472, 98, 770)
-    }
-
-    #[cfg(not(windows))]
-    pub fn raw_field_counts() -> (usize, usize, usize, usize) {
-        (0, 0, 0, 0)
-    }
-
-    #[cfg(windows)]
-    pub fn read_raw_page_sample(
-        &mut self,
-        sample_tick: u64,
-        timestamp_ns: u64,
-    ) -> TelemetryResult<Option<RawPageSample>> {
-        if !self.status()?.is_live() {
-            return Ok(None);
-        }
-
-        let physics = self.physics_mapping.physics_controls()?;
-        if physics.packet_id == self.last_physics_packet_id {
-            return Ok(None);
-        }
-        self.last_physics_packet_id = physics.packet_id;
-
-        Ok(Some(RawPageSample {
-            sample_tick,
-            timestamp_ns,
-            physics_page: self.physics_mapping.raw_bytes().to_vec(),
-            graphics_page: self.graphics_mapping.raw_bytes().to_vec(),
-            static_page: self.static_mapping.raw_bytes().to_vec(),
-        }))
-    }
-
-    #[cfg(not(windows))]
-    pub fn read_raw_page_sample(
-        &mut self,
-        _sample_tick: u64,
-        _timestamp_ns: u64,
-    ) -> TelemetryResult<Option<RawPageSample>> {
-        Ok(None)
     }
 
     #[cfg(windows)]
@@ -525,10 +445,6 @@ impl WindowsSharedMemory {
             speed_kmh: physics.speed_kmh,
             clutch: physics.clutch,
         })
-    }
-
-    fn raw_bytes(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.view as *const u8, self.mapped_size) }
     }
 
     fn static_snapshot(&self) -> TelemetryResult<AccSessionInfo> {

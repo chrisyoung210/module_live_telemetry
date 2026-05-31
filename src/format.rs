@@ -9,7 +9,6 @@ pub const FORMAT_VERSION: u16 = 2;
 pub const HEADER_SIZE: u16 = 128;
 pub const TIMEBASE_HZ: u32 = 1_000_000_000;
 pub const SCHEMA_HASH: u64 = 0x4143_544c_0000_0002;
-pub const SCHEMA_HASH_V1: u64 = 0x4143_544c_0000_0001;
 
 pub const CHUNK_MAGIC: [u8; 4] = *b"CHNK";
 pub const CHUNK_HEADER_SIZE: u16 = 72;
@@ -38,8 +37,7 @@ pub const CLUSTER_CAR_STATE: u16 = 0x0700;
 pub const CLUSTER_ENVIRONMENT: u16 = 0x0800;
 pub const CLUSTER_OTHER_CARS: u16 = 0x0900;
 
-// obsolete – kept for old-format import compatibility
-pub const CLUSTER_RAW_PAGES: u16 = 0x0200;
+
 
 // ---------------------------------------------------------------------------
 // Column IDs
@@ -475,20 +473,7 @@ pub const OTHER_CARS_COLUMNS: [ColumnSpec; 6] = [
     ColumnSpec::new(COL_CAR_ID, "carId", TYPE_BYTES),
 ];
 
-// obsolete raw-page columns – kept for old-format import
-pub const COL_RAW_SAMPLE_TICK: u16 = 1001;
-pub const COL_RAW_TIMESTAMP_NS: u16 = 1002;
-pub const COL_RAW_PHYSICS_PAGE: u16 = 1003;
-pub const COL_RAW_GRAPHICS_PAGE: u16 = 1004;
-pub const COL_RAW_STATIC_PAGE: u16 = 1005;
 
-pub const RAW_PAGE_COLUMNS: [ColumnSpec; 5] = [
-    ColumnSpec::new(COL_RAW_SAMPLE_TICK, "sampleTick", TYPE_U64),
-    ColumnSpec::new(COL_RAW_TIMESTAMP_NS, "timestampNs", TYPE_U64),
-    ColumnSpec::new(COL_RAW_PHYSICS_PAGE, "rawPhysicsPage", TYPE_BYTES),
-    ColumnSpec::new(COL_RAW_GRAPHICS_PAGE, "rawGraphicsPage", TYPE_BYTES),
-    ColumnSpec::new(COL_RAW_STATIC_PAGE, "rawStaticPage", TYPE_BYTES),
-];
 
 // ---------------------------------------------------------------------------
 // FileHeader, ChunkHeader, ColumnEntry, IndexEntry (unchanged)
@@ -804,7 +789,7 @@ pub fn validate_schema(bytes: &[u8]) -> TelemetryResult<()> {
         return Err(TelemetryError::InvalidFormat("bad schema block".to_string()));
     }
     let hash = u64::from_le_bytes(bytes[4..12].try_into().unwrap());
-    if hash != SCHEMA_HASH && hash != SCHEMA_HASH_V1 {
+    if hash != SCHEMA_HASH {
         return Err(TelemetryError::InvalidFormat("schema hash mismatch".to_string()));
     }
     Ok(())

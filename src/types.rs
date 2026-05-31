@@ -1,7 +1,7 @@
 // Re-export cluster IDs from format
 pub use crate::format::{
     CLUSTER_CAR_STATE, CLUSTER_CONTROLS, CLUSTER_ENVIRONMENT, CLUSTER_MOTION,
-    CLUSTER_OTHER_CARS, CLUSTER_POWERTRAIN, CLUSTER_RAW_PAGES, CLUSTER_SESSION, CLUSTER_TIMING,
+    CLUSTER_OTHER_CARS, CLUSTER_POWERTRAIN, CLUSTER_SESSION, CLUSTER_TIMING,
     CLUSTER_TYRES,
 };
 
@@ -337,44 +337,6 @@ pub struct RecordingSummary {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy raw-page types (kept for old-format import)
-// ---------------------------------------------------------------------------
-#[derive(Debug, Clone)]
-pub struct RawPageSample {
-    pub sample_tick: u64,
-    pub timestamp_ns: u64,
-    pub physics_page: Vec<u8>,
-    pub graphics_page: Vec<u8>,
-    pub static_page: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct RawGraphicsSample {
-    pub sample_tick: u64,
-    pub timestamp_ns: u64,
-    pub status: i32,
-    pub session: i32,
-    pub completed_laps: i32,
-    pub current_lap_time_ms: i32,
-    pub last_lap_time_ms: i32,
-    pub best_lap_time_ms: i32,
-    pub distance_traveled_m: f32,
-    pub normalized_car_position: f32,
-    pub is_valid_lap: i32,
-    pub current_sector: i32,
-    pub last_sector_time_ms: i32,
-    pub in_pit: i32,
-    pub in_pit_lane: i32,
-    pub delta_lap_time_ms: i32,
-}
-
-#[derive(Debug, Clone)]
-pub struct RawGraphicsPageSample {
-    pub sample_tick: u64,
-    pub timestamp_ns: u64,
-    pub page: Vec<u8>,
-}
-
 // ---------------------------------------------------------------------------
 // ACC session kind
 // ---------------------------------------------------------------------------
