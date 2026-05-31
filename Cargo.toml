@@ -1,0 +1,14 @@
+[package]
+name = "module_live_telemetry"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "module_live_telemetry"
+path = "src/lib.rs"
+
+[[bin]]
+name = "acc-live-telemetry"
+path = "src/bin/acc-live-telemetry.rs"
+
+[dependencies]
