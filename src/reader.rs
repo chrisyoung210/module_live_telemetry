@@ -1,11 +1,27 @@
 use crate::error::{TelemetryError, TelemetryResult};
 use crate::format::{
     crc32, read_i32, read_u16, read_u32, read_u64, validate_schema, x1000_to_hz, ChunkHeader,
-    ColumnEntry, FileHeader, IndexEntry, CHUNK_MAGIC, COL_BRAKE, COL_CLUTCH, COL_FUEL, COL_GAS,
-    COL_GEAR, COL_RPMS, COL_SAMPLE_TICK, COL_SPEED_KMH, COL_STEER_ANGLE, COL_TIMESTAMP_NS,
-    FOOTER_MAGIC, HEADER_SIZE, INDEX_MAGIC, META_MAGIC,
+    ColumnEntry, FileHeader, IndexEntry, CHUNK_MAGIC, CLUSTER_SESSION, CLUSTER_TIMING,
+    COL_BRAKE, COL_CLUTCH, COL_COMPLETED_LAPS, COL_CLOCK, COL_CURRENT_SECTOR_INDEX,
+    COL_CURRENT_TIME_STR, COL_DISTANCE_TRAVELED, COL_FUEL, COL_FUEL_ESTIMATED_LAPS, COL_FUEL_X_LAP,
+    COL_GAS, COL_GEAR, COL_GAP_AHEAD_OR_TAIL, COL_GLOBAL_CHEQUERED, COL_GLOBAL_GREEN,
+    COL_GLOBAL_RED, COL_GLOBAL_WHITE, COL_GLOBAL_YELLOW, COL_GLOBAL_YELLOW1, COL_GLOBAL_YELLOW2,
+    COL_GLOBAL_YELLOW3, COL_I_BEST_TIME, COL_I_CURRENT_TIME, COL_I_DELTA_LAP_TIME,
+    COL_I_ESTIMATED_LAP_TIME, COL_I_LAST_TIME, COL_I_SPLIT, COL_IS_DELTA_POSITIVE,
+    COL_IS_IN_PIT, COL_IS_IN_PIT_LANE, COL_IS_VALID_LAP, COL_LAST_SECTOR_TIME,
+    COL_LAST_TIME_STR, COL_MANDATORY_PIT_DONE, COL_MISSING_MANDATORY_PITS,
+    COL_NORMALIZED_CAR_POSITION, COL_NUMBER_OF_LAPS, COL_OBSERVED_SLOT_BEFORE_I_SPLIT,
+    COL_PENALTY_TIME, COL_PENALTY_TYPE, COL_POSITION, COL_RPMS,
+    COL_REPLAY_TIME_MULTIPLIER, COL_SESSION, COL_SESSION_INDEX, COL_SESSION_TIME_LEFT,
+    COL_SPEED_KMH, COL_SPLIT_STR, COL_STEER_ANGLE, COL_STATUS, COL_TIMESTAMP_NS,
+    COL_TRACK_STATUS, COL_SAMPLE_TICK, COL_USED_FUEL,
+    FOOTER_MAGIC, HEADER_SIZE, INDEX_MAGIC, META_MAGIC, COL_ESTIMATED_LAP_TIME_STR,
+    COL_DELTA_LAP_TIME_STR, COL_BEST_TIME_STR,
 };
-use crate::types::{ControlSample, RecordingSummary, SessionMetadata, CLUSTER_CONTROLS};
+use crate::types::{
+    ControlSample, RecordingSummary, SessionMetadata, SessionSample, TimingSample,
+    CLUSTER_CONTROLS,
+};
 use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -101,7 +117,50 @@ impl BinaryTelemetryReader {
         Ok(out)
     }
 
+    pub fn read_all_session(&self) -> TelemetryResult<Vec<SessionSample>> {
+        let mut out = Vec::new();
+        for entry in self
+            .index_entries
+            .iter()
+            .filter(|entry| entry.cluster_id == CLUSTER_SESSION)
+        {
+            out.extend(self.read_session_chunk(entry)?);
+        }
+        Ok(out)
+    }
+
+    pub fn read_all_timing(&self) -> TelemetryResult<Vec<TimingSample>> {
+        let mut out = Vec::new();
+        for entry in self
+            .index_entries
+            .iter()
+            .filter(|entry| entry.cluster_id == CLUSTER_TIMING)
+        {
+            out.extend(self.read_timing_chunk(entry)?);
+        }
+        Ok(out)
+    }
+
     fn read_controls_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<ControlSample>> {
+        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_CONTROLS)?;
+        decode_controls_payload(payload, &columns, header.sample_count as usize)
+    }
+
+    fn read_session_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<SessionSample>> {
+        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_SESSION)?;
+        decode_session_payload(payload, &columns, header.sample_count as usize)
+    }
+
+    fn read_timing_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<TimingSample>> {
+        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_TIMING)?;
+        decode_timing_payload(payload, &columns, header.sample_count as usize)
+    }
+
+    fn read_chunk_raw(
+        &self,
+        entry: &IndexEntry,
+        expected_cluster: u16,
+    ) -> TelemetryResult<(ChunkHeader, Vec<ColumnEntry>, &[u8])> {
         let start = entry.file_offset as usize;
         let end = start.saturating_add(entry.byte_len as usize);
         if end > self.bytes.len() {
@@ -113,10 +172,11 @@ impl BinaryTelemetryReader {
 
         let mut cursor = Cursor::new(&self.bytes[start..end]);
         let header = ChunkHeader::read_from(&mut cursor)?;
-        if header.cluster_id != CLUSTER_CONTROLS {
-            return Err(TelemetryError::InvalidFormat(
-                "attempted to decode non-controls chunk as controls".to_string(),
-            ));
+        if header.cluster_id != expected_cluster {
+            return Err(TelemetryError::InvalidFormat(format!(
+                "attempted to decode chunk with cluster 0x{:04x} as 0x{:04x}",
+                header.cluster_id, expected_cluster
+            )));
         }
 
         let mut columns = Vec::with_capacity(header.column_count as usize);
@@ -128,7 +188,7 @@ impl BinaryTelemetryReader {
         let payload_end = payload_start + header.payload_len as usize;
         if payload_end > end {
             return Err(TelemetryError::InvalidFormat(
-                "controls payload points past chunk".to_string(),
+                "payload points past chunk".to_string(),
             ));
         }
         let payload = &self.bytes[payload_start..payload_end];
@@ -139,7 +199,7 @@ impl BinaryTelemetryReader {
             )));
         }
 
-        decode_controls_payload(payload, &columns, header.sample_count as usize)
+        Ok((header, columns, payload))
     }
 }
 
@@ -296,6 +356,136 @@ fn decode_controls_payload(
     Ok(out)
 }
 
+fn decode_session_payload(
+    payload: &[u8],
+    columns: &[ColumnEntry],
+    count: usize,
+) -> TelemetryResult<Vec<SessionSample>> {
+    let ticks = read_u64_column(payload, columns, COL_SAMPLE_TICK, count)?;
+    let timestamps = read_u64_column(payload, columns, COL_TIMESTAMP_NS, count)?;
+    let status = read_i32_column(payload, columns, COL_STATUS, count)?;
+    let session = read_i32_column(payload, columns, COL_SESSION, count)?;
+    let session_index = read_i32_column(payload, columns, COL_SESSION_INDEX, count)?;
+    let completed_laps = read_i32_column(payload, columns, COL_COMPLETED_LAPS, count)?;
+    let position = read_i32_column(payload, columns, COL_POSITION, count)?;
+    let session_time_left = read_f32_column(payload, columns, COL_SESSION_TIME_LEFT, count)?;
+    let number_of_laps = read_i32_column(payload, columns, COL_NUMBER_OF_LAPS, count)?;
+    let current_sector_index = read_i32_column(payload, columns, COL_CURRENT_SECTOR_INDEX, count)?;
+    let normalized_car_position = read_f32_column(payload, columns, COL_NORMALIZED_CAR_POSITION, count)?;
+    let is_in_pit = read_i32_column(payload, columns, COL_IS_IN_PIT, count)?;
+    let is_in_pit_lane = read_i32_column(payload, columns, COL_IS_IN_PIT_LANE, count)?;
+    let mandatory_pit_done = read_i32_column(payload, columns, COL_MANDATORY_PIT_DONE, count)?;
+    let missing_mandatory_pits = read_i32_column(payload, columns, COL_MISSING_MANDATORY_PITS, count)?;
+    let penalty_time = read_f32_column(payload, columns, COL_PENALTY_TIME, count)?;
+    let penalty_type = read_i32_column(payload, columns, COL_PENALTY_TYPE, count)?;
+    let track_status = read_u16_column_array(payload, columns, COL_TRACK_STATUS, count, 33)?;
+    let clock = read_f32_column(payload, columns, COL_CLOCK, count)?;
+    let replay_time_multiplier = read_f32_column(payload, columns, COL_REPLAY_TIME_MULTIPLIER, count)?;
+    let is_valid_lap = read_i32_column(payload, columns, COL_IS_VALID_LAP, count)?;
+    let global_yellow = read_i32_column(payload, columns, COL_GLOBAL_YELLOW, count)?;
+    let global_yellow1 = read_i32_column(payload, columns, COL_GLOBAL_YELLOW1, count)?;
+    let global_yellow2 = read_i32_column(payload, columns, COL_GLOBAL_YELLOW2, count)?;
+    let global_yellow3 = read_i32_column(payload, columns, COL_GLOBAL_YELLOW3, count)?;
+    let global_white = read_i32_column(payload, columns, COL_GLOBAL_WHITE, count)?;
+    let global_green = read_i32_column(payload, columns, COL_GLOBAL_GREEN, count)?;
+    let global_chequered = read_i32_column(payload, columns, COL_GLOBAL_CHEQUERED, count)?;
+    let global_red = read_i32_column(payload, columns, COL_GLOBAL_RED, count)?;
+    let gap_ahead_or_tail_value = read_i32_column(payload, columns, COL_GAP_AHEAD_OR_TAIL, count)?;
+
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        out.push(SessionSample {
+            sample_tick: ticks[i],
+            timestamp_ns: timestamps[i],
+            status: status[i],
+            session: session[i],
+            session_index: session_index[i],
+            completed_laps: completed_laps[i],
+            position: position[i],
+            session_time_left: session_time_left[i],
+            number_of_laps: number_of_laps[i],
+            current_sector_index: current_sector_index[i],
+            normalized_car_position: normalized_car_position[i],
+            is_in_pit: is_in_pit[i],
+            is_in_pit_lane: is_in_pit_lane[i],
+            mandatory_pit_done: mandatory_pit_done[i],
+            missing_mandatory_pits: missing_mandatory_pits[i],
+            penalty_time: penalty_time[i],
+            penalty_type: penalty_type[i],
+            track_status: track_status[i],
+            clock: clock[i],
+            replay_time_multiplier: replay_time_multiplier[i],
+            is_valid_lap: is_valid_lap[i],
+            global_yellow: global_yellow[i],
+            global_yellow1: global_yellow1[i],
+            global_yellow2: global_yellow2[i],
+            global_yellow3: global_yellow3[i],
+            global_white: global_white[i],
+            global_green: global_green[i],
+            global_chequered: global_chequered[i],
+            global_red: global_red[i],
+            gap_ahead_or_tail_value: gap_ahead_or_tail_value[i],
+        });
+    }
+    Ok(out)
+}
+
+fn decode_timing_payload(
+    payload: &[u8],
+    columns: &[ColumnEntry],
+    count: usize,
+) -> TelemetryResult<Vec<TimingSample>> {
+    let ticks = read_u64_column(payload, columns, COL_SAMPLE_TICK, count)?;
+    let timestamps = read_u64_column(payload, columns, COL_TIMESTAMP_NS, count)?;
+    let i_current_time = read_i32_column(payload, columns, COL_I_CURRENT_TIME, count)?;
+    let i_last_time = read_i32_column(payload, columns, COL_I_LAST_TIME, count)?;
+    let i_best_time = read_i32_column(payload, columns, COL_I_BEST_TIME, count)?;
+    let i_split = read_i32_column(payload, columns, COL_I_SPLIT, count)?;
+    let last_sector_time = read_i32_column(payload, columns, COL_LAST_SECTOR_TIME, count)?;
+    let i_delta_lap_time = read_i32_column(payload, columns, COL_I_DELTA_LAP_TIME, count)?;
+    let is_delta_positive = read_i32_column(payload, columns, COL_IS_DELTA_POSITIVE, count)?;
+    let i_estimated_lap_time = read_i32_column(payload, columns, COL_I_ESTIMATED_LAP_TIME, count)?;
+    let fuel_estimated_laps = read_f32_column(payload, columns, COL_FUEL_ESTIMATED_LAPS, count)?;
+    let fuel_x_lap = read_f32_column(payload, columns, COL_FUEL_X_LAP, count)?;
+    let used_fuel = read_f32_column(payload, columns, COL_USED_FUEL, count)?;
+    let distance_traveled = read_f32_column(payload, columns, COL_DISTANCE_TRAVELED, count)?;
+    let current_time_str = read_u16_column_array(payload, columns, COL_CURRENT_TIME_STR, count, 15)?;
+    let last_time_str = read_u16_column_array(payload, columns, COL_LAST_TIME_STR, count, 15)?;
+    let best_time_str = read_u16_column_array(payload, columns, COL_BEST_TIME_STR, count, 15)?;
+    let split_str = read_u16_column_array(payload, columns, COL_SPLIT_STR, count, 15)?;
+    let delta_lap_time_str = read_u16_column_array(payload, columns, COL_DELTA_LAP_TIME_STR, count, 15)?;
+    let estimated_lap_time_str = read_u16_column_array(payload, columns, COL_ESTIMATED_LAP_TIME_STR, count, 15)?;
+    let observed_slot_before_i_split = read_i32_column(payload, columns, COL_OBSERVED_SLOT_BEFORE_I_SPLIT, count)?;
+
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        out.push(TimingSample {
+            sample_tick: ticks[i],
+            timestamp_ns: timestamps[i],
+            i_current_time: i_current_time[i],
+            i_last_time: i_last_time[i],
+            i_best_time: i_best_time[i],
+            i_split: i_split[i],
+            last_sector_time: last_sector_time[i],
+            i_delta_lap_time: i_delta_lap_time[i],
+            is_delta_positive: is_delta_positive[i],
+            i_estimated_lap_time: i_estimated_lap_time[i],
+            fuel_estimated_laps: fuel_estimated_laps[i],
+            fuel_x_lap: fuel_x_lap[i],
+            used_fuel: used_fuel[i],
+            distance_traveled: distance_traveled[i],
+            current_time_str: current_time_str[i],
+            last_time_str: last_time_str[i],
+            best_time_str: best_time_str[i],
+            split_str: split_str[i],
+            delta_lap_time_str: delta_lap_time_str[i],
+            estimated_lap_time_str: estimated_lap_time_str[i],
+            observed_slot_before_i_split: observed_slot_before_i_split[i],
+        });
+    }
+    Ok(out)
+}
+
 fn find_column<'a>(columns: &'a [ColumnEntry], id: u16) -> TelemetryResult<&'a ColumnEntry> {
     columns
         .iter()
@@ -358,6 +548,29 @@ fn read_i32_column_opt(
             bytes.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect()
         })
     })
+}
+
+fn read_u16_column_array<const N: usize>(
+    payload: &[u8],
+    columns: &[ColumnEntry],
+    id: u16,
+    count: usize,
+    lane_count: usize,
+) -> TelemetryResult<Vec<[u16; N]>> {
+    let column = find_column(columns, id)?;
+    let item_size = lane_count * 2; // each u16 is 2 bytes
+    let bytes = column_bytes(payload, column, count, item_size)?;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let start = i * item_size;
+        let mut arr = [0u16; N];
+        for j in 0..N.min(lane_count) {
+            let off = start + j * 2;
+            arr[j] = u16::from_le_bytes([bytes[off], bytes[off + 1]]);
+        }
+        out.push(arr);
+    }
+    Ok(out)
 }
 
 fn column_bytes<'a>(

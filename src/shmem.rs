@@ -1,5 +1,9 @@
 use crate::error::{TelemetryError, TelemetryResult};
-use crate::types::ControlSample;
+use crate::types::{
+    CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
+    PowertrainSample, SessionSample, TimingSample, TyreSample,
+};
+use crate::writer::TelemetryFrame;
 
 pub const ACC_STATUS_OFF: i32 = 0;
 pub const ACC_STATUS_REPLAY: i32 = 1;
@@ -151,7 +155,268 @@ impl AccSharedMemoryReader {
     ) -> TelemetryResult<Option<ControlSample>> {
         Ok(None)
     }
+
+    // ---- v2 full-frame recording ----
+
+    #[cfg(windows)]
+    pub fn read_telemetry_frame(
+        &mut self,
+        sample_tick: u64,
+        timestamp_ns: u64,
+    ) -> TelemetryResult<Option<TelemetryFrame>> {
+        if !self.status()?.is_live() {
+            return Ok(None);
+        }
+
+        let phys = self.physics_mapping.physics_full()?;
+        if phys.packet_id == self.last_physics_packet_id {
+            return Ok(None);
+        }
+        self.last_physics_packet_id = phys.packet_id;
+
+        let gfx = self.graphics_mapping.graphics_full()?;
+
+        Ok(Some(TelemetryFrame {
+            sample_tick,
+            timestamp_ns,
+            controls: ControlSample {
+                sample_tick,
+                timestamp_ns,
+                physics_packet_id: phys.packet_id,
+                graphics_packet_id: gfx.packet_id,
+                speed_kmh: phys.speed_kmh,
+                gas: phys.gas,
+                brake: phys.brake,
+                clutch: phys.clutch,
+                steer_angle: phys.steer_angle,
+                gear: phys.gear,
+                rpms: phys.rpms,
+                fuel: phys.fuel,
+            },
+            motion: MotionSample {
+                sample_tick,
+                timestamp_ns,
+                velocity: phys.velocity,
+                acc_g: phys.acc_g,
+                local_velocity: phys.local_velocity,
+                local_angular_vel: phys.local_angular_vel,
+                heading: phys.heading,
+                pitch: phys.pitch,
+                roll: phys.roll,
+            },
+            tyres: TyreSample {
+                sample_tick,
+                timestamp_ns,
+                wheel_slip: phys.wheel_slip,
+                wheel_load: phys.wheel_load,
+                wheels_pressure: phys.wheels_pressure,
+                wheel_angular_speed: phys.wheel_angular_speed,
+                tyre_wear: phys.tyre_wear,
+                tyre_dirty_level: phys.tyre_dirty_level,
+                tyre_core_temperature: phys.tyre_core_temperature,
+                camber_rad: phys.camber_rad,
+                suspension_travel: phys.suspension_travel,
+                slip_ratio: phys.slip_ratio,
+                slip_angle: phys.slip_angle,
+                tyre_temp_i: phys.tyre_temp_i,
+                tyre_temp_m: phys.tyre_temp_m,
+                tyre_temp_o: phys.tyre_temp_o,
+                tyre_temp: phys.tyre_temp,
+                mz: phys.mz,
+                fx: phys.fx,
+                fy: phys.fy,
+                suspension_damage: phys.suspension_damage,
+                brake_temp: phys.brake_temp,
+                brake_pressure: phys.brake_pressure,
+                pad_life: phys.pad_life,
+                disc_life: phys.disc_life,
+                tyre_contact_point: flatten_f32_3x4(phys.tyre_contact_point),
+                tyre_contact_normal: flatten_f32_3x4(phys.tyre_contact_normal),
+                tyre_contact_heading: flatten_f32_3x4(phys.tyre_contact_heading),
+                number_of_tyres_out: phys.number_of_tyres_out,
+                front_brake_compound: phys.front_brake_compound,
+                rear_brake_compound: phys.rear_brake_compound,
+            },
+            powertrain: PowertrainSample {
+                sample_tick,
+                timestamp_ns,
+                turbo_boost: phys.turbo_boost,
+                ballast: phys.ballast,
+                kers_charge: phys.kers_charge,
+                kers_input: phys.kers_input,
+                kers_current_kj: phys.kers_current_kj,
+                drs: phys.drs,
+                tc: phys.tc,
+                abs: phys.abs,
+                engine_brake: phys.engine_brake,
+                ers_recovery_level: phys.ers_recovery_level,
+                ers_power_level: phys.ers_power_level,
+                ers_heat_charging: phys.ers_heat_charging,
+                ers_is_charging: phys.ers_is_charging,
+                drs_available: phys.drs_available,
+                drs_enabled: phys.drs_enabled,
+                tc_in_action: phys.tc_in_action,
+                abs_in_action: phys.abs_in_action,
+                auto_shifter_on: phys.auto_shifter_on,
+                current_max_rpm: phys.current_max_rpm,
+                p2p_activations: phys.p2p_activations,
+                p2p_status: phys.p2p_status,
+                water_temp: phys.water_temp,
+            },
+            session: SessionSample {
+                sample_tick,
+                timestamp_ns,
+                status: gfx.status,
+                session: gfx.session,
+                session_index: gfx.session_index,
+                completed_laps: gfx.completed_laps,
+                position: gfx.position,
+                session_time_left: gfx.session_time_left,
+                number_of_laps: gfx.number_of_laps,
+                current_sector_index: gfx.current_sector_index,
+                normalized_car_position: gfx.normalized_car_position,
+                is_in_pit: gfx.is_in_pit,
+                is_in_pit_lane: gfx.is_in_pit_lane,
+                mandatory_pit_done: gfx.mandatory_pit_done,
+                missing_mandatory_pits: gfx.missing_mandatory_pits,
+                penalty_time: gfx.penalty_time,
+                penalty_type: gfx.penalty,
+                track_status: gfx.track_status,
+                clock: gfx.clock,
+                replay_time_multiplier: gfx.replay_time_multiplier,
+                is_valid_lap: gfx.is_valid_lap,
+                global_yellow: gfx.global_yellow,
+                global_yellow1: gfx.global_yellow1,
+                global_yellow2: gfx.global_yellow2,
+                global_yellow3: gfx.global_yellow3,
+                global_white: gfx.global_white,
+                global_green: gfx.global_green,
+                global_chequered: gfx.global_chequered,
+                global_red: gfx.global_red,
+                gap_ahead_or_tail_value: gfx.gap_ahead,
+            },
+            timing: TimingSample {
+                sample_tick,
+                timestamp_ns,
+                i_current_time: gfx.i_current_time,
+                i_last_time: gfx.i_last_time,
+                i_best_time: gfx.i_best_time,
+                i_split: gfx.i_split,
+                last_sector_time: gfx.last_sector_time,
+                i_delta_lap_time: gfx.i_delta_lap_time,
+                is_delta_positive: gfx.is_delta_positive,
+                i_estimated_lap_time: gfx.i_estimated_lap_time,
+                fuel_estimated_laps: gfx.fuel_estimated_laps,
+                fuel_x_lap: gfx.fuel_x_lap,
+                used_fuel: gfx.used_fuel,
+                distance_traveled: gfx.distance_traveled,
+                current_time_str: gfx.current_time,
+                last_time_str: gfx.last_time,
+                best_time_str: gfx.best_time,
+                split_str: gfx.split,
+                delta_lap_time_str: gfx.delta_lap_time,
+                estimated_lap_time_str: gfx.estimated_lap_time,
+                observed_slot_before_i_split: 0,
+            },
+            car_state: CarStateSample {
+                sample_tick,
+                timestamp_ns,
+                car_damage: phys.car_damage,
+                pit_limiter_on: phys.pit_limiter_on,
+                ride_height: phys.ride_height,
+                ignition_on: phys.ignition_on,
+                starter_engine_on: phys.starter_engine_on,
+                is_engine_running: phys.is_engine_running,
+                is_ai_controlled: phys.is_ai_controlled,
+                cg_height: phys.cg_height,
+                brake_bias: phys.brake_bias,
+                rain_lights: gfx.rain_lights,
+                flashing_lights: gfx.flashing_lights,
+                lights_stage: gfx.lights_stage,
+                wiper_lv: gfx.wiper_lv,
+                driver_stint_total_time_left: gfx.driver_stint_total_time_left,
+                driver_stint_time_left: gfx.driver_stint_time_left,
+                rain_tyres: gfx.rain_tyres,
+                current_tyre_set: gfx.current_tyre_set,
+                strategy_tyre_set: gfx.strategy_tyre_set,
+                track_grip_status: gfx.track_grip_status,
+                tyre_compound_str: gfx.tyre_compound,
+                mfd_tyre_set: gfx.mfd_tyre_set,
+                mfd_fuel_to_add: gfx.mfd_fuel_to_add,
+                mfd_tyre_pressure: [
+                    gfx.mfd_tyre_pressure_lf,
+                    gfx.mfd_tyre_pressure_rf,
+                    gfx.mfd_tyre_pressure_lr,
+                    gfx.mfd_tyre_pressure_rr,
+                ],
+                ideal_line_on: gfx.ideal_line_on,
+                is_setup_menu_visible: gfx.is_setup_menu_visible,
+                main_display_index: gfx.main_display_index,
+                secondary_display_index: gfx.secondary_display_index,
+                direction_lights_left: gfx.direction_lights_left,
+                direction_lights_right: gfx.direction_lights_right,
+                tc_level: gfx.tc,
+                tc_cut: gfx.tc_cut,
+                engine_map: gfx.engine_map,
+                abs_level: gfx.abs,
+                exhaust_temperature: gfx.exhaust_temperature,
+                final_ff: phys.final_ff,
+                performance_meter: phys.performance_meter,
+                kerb_vibration: phys.kerb_vibration,
+                slip_vibrations: phys.slip_vibrations,
+                g_vibrations: phys.g_vibrations,
+                abs_vibrations: phys.abs_vibrations,
+            },
+            environment: EnvironmentSample {
+                sample_tick,
+                timestamp_ns,
+                air_density: phys.air_density,
+                air_temp: phys.air_temp,
+                road_temp: phys.road_temp,
+                wind_speed: gfx.wind_speed,
+                wind_direction: gfx.wind_direction,
+                surface_grip: gfx.surface_grip,
+                rain_intensity: gfx.rain_intensity,
+                rain_intensity_in_10min: gfx.rain_intensity_in_10min,
+                rain_intensity_in_30min: gfx.rain_intensity_in_30min,
+            },
+            other_cars: OtherCarsSample {
+                sample_tick,
+                timestamp_ns,
+                active_cars: gfx.active_cars,
+                player_car_id: gfx.player_car_id,
+                car_coordinates: gfx.car_coordinates.iter().flat_map(|c| c.to_vec()).collect(),
+                car_id: gfx.car_id.to_vec(),
+            },
+        }))
+    }
+
+    #[cfg(not(windows))]
+    pub fn read_telemetry_frame(
+        &mut self,
+        _sample_tick: u64,
+        _timestamp_ns: u64,
+    ) -> TelemetryResult<Option<TelemetryFrame>> {
+        Err(TelemetryError::InvalidArgument(
+            "ACC shared memory is only available on Windows".to_string(),
+        ))
+    }
 }
+
+#[cfg(windows)]
+fn flatten_f32_3x4(arr: [[f32; 3]; 4]) -> [f32; 12] {
+    let mut out = [0.0f32; 12];
+    for i in 0..4 {
+        out[i * 3] = arr[i][0];
+        out[i * 3 + 1] = arr[i][1];
+        out[i * 3 + 2] = arr[i][2];
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Windows shared memory structs
+// ---------------------------------------------------------------------------
 
 #[cfg(windows)]
 #[repr(C)]
@@ -274,7 +539,8 @@ struct SPageFileGraphicsRaw {
     car_id: [i32; 60],
     player_car_id: i32,
     penalty_time: f32,
-    penalty_type: i32,
+    flag: i32,          // AC_FLAG_TYPE
+    penalty: i32,       // AC_PENALTY_TYPE (was missing - caused 4-byte shift)
     ideal_line_on: i32,
     is_in_pit_lane: i32,
     surface_grip: f32,
@@ -445,6 +711,24 @@ impl WindowsSharedMemory {
             speed_kmh: physics.speed_kmh,
             clutch: physics.clutch,
         })
+    }
+
+    fn physics_full(&self) -> TelemetryResult<SPageFilePhysicsControls> {
+        if self.mapped_size < std::mem::size_of::<SPageFilePhysicsControls>() {
+            return Err(TelemetryError::InvalidFormat(
+                "ACC physics mapping size too small".to_string(),
+            ));
+        }
+        Ok(unsafe { *(self.view as *const SPageFilePhysicsControls) })
+    }
+
+    fn graphics_full(&self) -> TelemetryResult<SPageFileGraphicsRaw> {
+        if self.mapped_size < std::mem::size_of::<SPageFileGraphicsRaw>() {
+            return Err(TelemetryError::InvalidFormat(
+                "ACC graphics mapping size too small".to_string(),
+            ));
+        }
+        Ok(unsafe { *(self.view as *const SPageFileGraphicsRaw) })
     }
 
     fn static_snapshot(&self) -> TelemetryResult<AccSessionInfo> {

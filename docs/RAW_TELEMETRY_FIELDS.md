@@ -22,8 +22,9 @@ Notes:
 - Length is byte length of the whole field. Array fields are stored contiguously.
 - For array element `i`, element offset is `field_offset + i * scalar_size`.
 - The raw bytes are not clamped, normalized, converted, or otherwise computed.
-- `is_valid_lap` was verified against the recorded session and is at graphics offset `1408`.
-- The graphics tail around offsets `1400..1583` follows the observed ACC raw bytes used by `raw-laps`. Offset `1400` is documented as an observed raw slot because the recorded data shows a 4-byte alignment difference before `i_split`.
+- `is_valid_lap` was verified against the recorded session and is at graphics offset `1404` (previously misreported as `1408` due to missing `penalty` field at offset `1228`).
+- The `penalty` field (AC_PENALTY_TYPE) at offset `1228` was previously missing from the struct, causing a 4-byte offset shift for all subsequent fields. This has been corrected.
+- The `_observed_slot_before_i_split` at offset `1400` was the correct `i_split` position shifted by the missing `penalty` field.
 
 ## Physics Page: `rawPhysicsPage`
 
@@ -146,10 +147,11 @@ Notes:
 | `car_id` | `i32` | 60 | 976 | 240 | 最多 60 台车 ID | IDs for up to 60 cars |
 | `player_car_id` | `i32` | 1 | 1216 | 4 | 玩家车辆 ID | Player car id |
 | `penalty_time` | `f32` | 1 | 1220 | 4 | 罚时 | Penalty time |
-| `penalty_type` | `i32` | 1 | 1224 | 4 | 处罚类型 | Penalty type |
-| `ideal_line_on` | `i32` | 1 | 1228 | 4 | 理想线是否开启 | Ideal line enabled state |
-| `is_in_pit_lane` | `i32` | 1 | 1232 | 4 | 是否在维修通道 | In pit lane state |
-| `surface_grip` | `f32` | 1 | 1236 | 4 | 路面抓地力 | Surface grip |
+| `penalty_type` | `i32` | 1 | 1224 | 4 | 旗语类型（蓝/黄/黑/白/方格/处罚旗） | Flag type (blue/yellow/black/white/chequered/penalty) |
+| `penalty` | `i32` | 1 | 1228 | 4 | 处罚类型（DSQ等）；之前遗漏导致后续偏移-4B | Penalty type; was missing, caused 4B offset shift |
+| `ideal_line_on` | `i32` | 1 | 1232 | 4 | 理想线是否开启 | Ideal line enabled state |
+| `is_in_pit_lane` | `i32` | 1 | 1236 | 4 | 是否在维修通道 | In pit lane state |
+| `surface_grip` | `f32` | 1 | 1240 | 4 | 路面抓地力 | Surface grip |
 | `mandatory_pit_done` | `i32` | 1 | 1240 | 4 | 强制进站是否完成 | Mandatory pit completed state |
 | `wind_speed` | `f32` | 1 | 1244 | 4 | 风速 | Wind speed |
 | `wind_direction` | `f32` | 1 | 1248 | 4 | 风向 | Wind direction |
@@ -178,12 +180,11 @@ Notes:
 | `_padding_after_estimated_lap_time` | `u8` | 2 | 1390 | 2 | C 结构体对齐填充 | C layout alignment padding |
 | `i_estimated_lap_time` | `i32` | 1 | 1392 | 4 | 预计圈速毫秒 | Estimated lap time in milliseconds |
 | `is_delta_positive` | `i32` | 1 | 1396 | 4 | 圈速差是否为正 | Delta positive state |
-| `_observed_slot_before_i_split` | `i32` | 1 | 1400 | 4 | 真实录制中位于分段时间前的 4 字节 raw slot；按原样保存 | Observed 4-byte raw slot before split time; preserved as-is |
-| `i_split` | `i32` | 1 | 1404 | 4 | 分段时间毫秒；本录制中该位置表现为 split/time 值 | Split time in milliseconds; observed as split/time value in this recording |
-| `is_valid_lap` | `i32` | 1 | 1408 | 4 | 当前圈是否有效；过线前一帧代表刚结束圈的有效性 | Current lap valid state; value before lap reset describes the lap that just ended |
-| `fuel_estimated_laps` | `f32` | 1 | 1412 | 4 | 燃油预计可跑圈数 | Estimated laps possible with current fuel level |
-| `track_status` | `u16` | 33 | 1416 | 66 | 赛道状态字符串 | Track status string |
-| `_padding_after_track_status` | `u8` | 2 | 1482 | 2 | C 结构体对齐填充 | C layout alignment padding |
+| `i_split` | `i32` | 1 | 1400 | 4 | 分段时间毫秒（之前被误标为 `_observed_slot_before_i_split`，实为 penalty 缺失导致错位） | Split time in milliseconds; previously mislabeled as `_observed_slot_before_i_split` due to missing penalty field |
+| `is_valid_lap` | `i32` | 1 | 1404 | 4 | 当前圈是否有效；过线前一帧代表刚结束圈的有效性 | Current lap valid state; value before lap reset describes the lap that just ended |
+| `fuel_estimated_laps` | `f32` | 1 | 1408 | 4 | 燃油预计可跑圈数 | Estimated laps possible with current fuel level |
+| `track_status` | `u16` | 33 | 1412 | 66 | 赛道状态字符串 | Track status string |
+| `_padding_after_track_status` | `u8` | 2 | 1478 | 2 | C 结构体对齐填充 | C layout alignment padding |
 | `missing_mandatory_pits` | `i32` | 1 | 1484 | 4 | 剩余强制进站次数 | Missing mandatory pit stops |
 | `clock` | `f32` | 1 | 1488 | 4 | 游戏时钟 | Game clock |
 | `direction_lights_left` | `i32` | 1 | 1492 | 4 | 左转向灯状态 | Left indicator state |

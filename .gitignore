@@ -3,3 +3,5 @@
 /data/*.acctlm
 /data/*.csv
 /.codegraph/
+/backup_data/
+/.sisyphus/
