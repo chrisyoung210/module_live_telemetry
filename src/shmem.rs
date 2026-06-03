@@ -627,52 +627,102 @@ struct SPageFileGraphicsRaw {
 #[cfg(windows)]
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct SPageFileStatic {
-    sm_version: [u16; 15],
-    ac_version: [u16; 15],
-    number_of_sessions: i32,
-    num_cars: i32,
-    car_model: [u16; 33],
-    track: [u16; 33],
-    player_name: [u16; 33],
-    player_surname: [u16; 33],
-    player_nick: [u16; 33],
-    sector_count: i32,
-    max_torque: f32,
-    max_power: f32,
-    max_rpm: i32,
-    max_fuel: f32,
-    suspension_max_travel: [f32; 4],
-    tyre_radius: [f32; 4],
-    max_turbo_boost: f32,
-    deprecated_1: f32,
-    deprecated_2: f32,
-    penalties_enabled: i32,
-    aid_fuel_rate: f32,
-    aid_tire_rate: f32,
-    aid_mechanical_damage: f32,
-    aid_allow_tyre_blankets: i32,
-    aid_stability: f32,
-    aid_auto_clutch: i32,
-    aid_auto_blip: i32,
-    has_drs: i32,
-    has_ers: i32,
-    has_kers: i32,
-    kers_max_j: f32,
-    engine_brake_settings_count: i32,
-    ers_power_controller_count: i32,
-    track_spline_length: f32,
-    track_configuration: [u16; 33],
-    ers_max_j: f32,
-    is_timed_race: i32,
-    has_extra_lap: i32,
-    car_skin: [u16; 33],
-    reversed_grid_positions: i32,
-    pit_window_start: i32,
-    pit_window_end: i32,
-    is_online: i32,
-    dry_tyres_name: [u16; 33],
-    wet_tyres_name: [u16; 33],
+pub struct SPageFileStatic {
+    pub sm_version: [u16; 15],
+    pub ac_version: [u16; 15],
+    pub number_of_sessions: i32,
+    pub num_cars: i32,
+    pub car_model: [u16; 33],
+    pub track: [u16; 33],
+    pub player_name: [u16; 33],
+    pub player_surname: [u16; 33],
+    pub player_nick: [u16; 33],
+    pub sector_count: i32,
+    pub max_torque: f32,
+    pub max_power: f32,
+    pub max_rpm: i32,
+    pub max_fuel: f32,
+    pub suspension_max_travel: [f32; 4],
+    pub tyre_radius: [f32; 4],
+    pub max_turbo_boost: f32,
+    pub deprecated_1: f32,
+    pub deprecated_2: f32,
+    pub penalties_enabled: i32,
+    pub aid_fuel_rate: f32,
+    pub aid_tire_rate: f32,
+    pub aid_mechanical_damage: f32,
+    pub aid_allow_tyre_blankets: i32,
+    pub aid_stability: f32,
+    pub aid_auto_clutch: i32,
+    pub aid_auto_blip: i32,
+    pub has_drs: i32,
+    pub has_ers: i32,
+    pub has_kers: i32,
+    pub kers_max_j: f32,
+    pub engine_brake_settings_count: i32,
+    pub ers_power_controller_count: i32,
+    pub track_spline_length: f32,
+    pub track_configuration: [u16; 33],
+    pub ers_max_j: f32,
+    pub is_timed_race: i32,
+    pub has_extra_lap: i32,
+    pub car_skin: [u16; 33],
+    pub reversed_grid_positions: i32,
+    pub pit_window_start: i32,
+    pub pit_window_end: i32,
+    pub is_online: i32,
+    pub dry_tyres_name: [u16; 33],
+    pub wet_tyres_name: [u16; 33],
+}
+
+impl SPageFileStatic {
+    /// Parse from raw bytes read from ACC shared-memory static page.
+    /// The byte slice may be shorter than the full struct (older game versions);
+    /// missing fields default to zero.
+    pub fn from_raw(bytes: &[u8]) -> Self {
+        let mut out = Self::default();
+        let field_size = std::mem::size_of::<Self>();
+        let copy_len = bytes.len().min(field_size);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                &mut out as *mut Self as *mut u8,
+                copy_len,
+            );
+        }
+        out
+    }
+
+    pub fn car_model_str(&self) -> String {
+        utf16_to_string(&self.car_model)
+    }
+
+    pub fn track_str(&self) -> String {
+        utf16_to_string(&self.track)
+    }
+
+    pub fn sm_version_str(&self) -> String {
+        utf16_to_string(&self.sm_version)
+    }
+
+    pub fn ac_version_str(&self) -> String {
+        utf16_to_string(&self.ac_version)
+    }
+}
+
+impl Default for SPageFileStatic {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+fn utf16_to_string(arr: &[u16]) -> String {
+    String::from_utf16_lossy(
+        &arr.iter()
+            .take_while(|&&c| c != 0)
+            .copied()
+            .collect::<Vec<u16>>(),
+    )
 }
 
 #[cfg(windows)]

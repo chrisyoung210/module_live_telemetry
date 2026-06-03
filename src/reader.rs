@@ -1,26 +1,30 @@
 use crate::error::{TelemetryError, TelemetryResult};
 use crate::format::{
     crc32, read_i32, read_u16, read_u32, read_u64, validate_schema, x1000_to_hz, ChunkHeader,
-    ColumnEntry, FileHeader, IndexEntry, LAP_INDEX_MAGIC, CHUNK_MAGIC, CLUSTER_SESSION, CLUSTER_TIMING,
-    COL_BRAKE, COL_CLUTCH, COL_COMPLETED_LAPS, COL_CLOCK, COL_CURRENT_SECTOR_INDEX,
-    COL_CURRENT_TIME_STR, COL_DISTANCE_TRAVELED, COL_FUEL, COL_FUEL_ESTIMATED_LAPS, COL_FUEL_X_LAP,
-    COL_GAS, COL_GEAR, COL_GAP_AHEAD_OR_TAIL, COL_GAP_BEHIND, COL_FLAG, COL_GLOBAL_CHEQUERED, COL_GLOBAL_GREEN,
-    COL_GLOBAL_RED, COL_GLOBAL_WHITE, COL_GLOBAL_YELLOW, COL_GLOBAL_YELLOW1, COL_GLOBAL_YELLOW2,
+    ColumnEntry, FileHeader, IndexEntry, LAP_INDEX_MAGIC, CHUNK_MAGIC, CLUSTER_ENVIRONMENT,
+    CLUSTER_SESSION, CLUSTER_TIMING,
+    COL_AIR_DENSITY, COL_AIR_TEMP, COL_BRAKE, COL_CLUTCH, COL_COMPLETED_LAPS, COL_CLOCK,
+    COL_CURRENT_SECTOR_INDEX, COL_CURRENT_TIME_STR, COL_DISTANCE_TRAVELED, COL_FUEL,
+    COL_FUEL_ESTIMATED_LAPS, COL_FUEL_X_LAP, COL_GAS, COL_GEAR, COL_GAP_AHEAD_OR_TAIL,
+    COL_GAP_BEHIND, COL_FLAG, COL_GLOBAL_CHEQUERED, COL_GLOBAL_GREEN, COL_GLOBAL_RED,
+    COL_GLOBAL_WHITE, COL_GLOBAL_YELLOW, COL_GLOBAL_YELLOW1, COL_GLOBAL_YELLOW2,
     COL_GLOBAL_YELLOW3, COL_I_BEST_TIME, COL_I_CURRENT_TIME, COL_I_DELTA_LAP_TIME,
     COL_I_ESTIMATED_LAP_TIME, COL_I_LAST_TIME, COL_I_SPLIT, COL_IS_DELTA_POSITIVE,
     COL_IS_IN_PIT, COL_IS_IN_PIT_LANE, COL_IS_VALID_LAP, COL_LAST_SECTOR_TIME,
     COL_LAST_TIME_STR, COL_MANDATORY_PIT_DONE, COL_MISSING_MANDATORY_PITS,
     COL_NORMALIZED_CAR_POSITION, COL_NUMBER_OF_LAPS, COL_OBSERVED_SLOT_BEFORE_I_SPLIT,
-    COL_PENALTY_TIME, COL_PENALTY_TYPE, COL_POSITION, COL_RPMS,
-    COL_REPLAY_TIME_MULTIPLIER, COL_SESSION, COL_SESSION_INDEX, COL_SESSION_TIME_LEFT,
-    COL_SPEED_KMH, COL_SPLIT_STR, COL_STEER_ANGLE, COL_STATUS, COL_TIMESTAMP_NS,
-    COL_TRACK_STATUS, COL_SAMPLE_TICK, COL_USED_FUEL,
+    COL_PENALTY_TIME, COL_PENALTY_TYPE, COL_POSITION, COL_RAIN_INTENSITY,
+    COL_RAIN_INTENSITY_IN_10MIN, COL_RAIN_INTENSITY_IN_30MIN, COL_RPMS,
+    COL_REPLAY_TIME_MULTIPLIER, COL_ROAD_TEMP, COL_SESSION, COL_SESSION_INDEX,
+    COL_SESSION_TIME_LEFT, COL_SPEED_KMH, COL_SPLIT_STR, COL_STEER_ANGLE, COL_STATUS,
+    COL_SURFACE_GRIP, COL_TIMESTAMP_NS, COL_TRACK_STATUS, COL_SAMPLE_TICK, COL_USED_FUEL,
+    COL_WIND_DIRECTION, COL_WIND_SPEED,
     FOOTER_MAGIC, HEADER_SIZE, INDEX_MAGIC, META_MAGIC, COL_ESTIMATED_LAP_TIME_STR,
     COL_DELTA_LAP_TIME_STR, COL_BEST_TIME_STR,
 };
 use crate::types::{
-    ControlSample, RecordingSummary, SessionMetadata, SessionSample, TimingSample, LapIndexEntry,
-    CLUSTER_CONTROLS,
+    ControlSample, EnvironmentSample, RecordingSummary, SessionMetadata, SessionSample,
+    TimingSample, LapIndexEntry, CLUSTER_CONTROLS,
 };
 use std::fs::File;
 use std::io::{Cursor, Read};
@@ -146,6 +150,18 @@ impl BinaryTelemetryReader {
         Ok(out)
     }
 
+    pub fn read_all_environment(&self) -> TelemetryResult<Vec<EnvironmentSample>> {
+        let mut out = Vec::new();
+        for entry in self
+            .index_entries
+            .iter()
+            .filter(|entry| entry.cluster_id == CLUSTER_ENVIRONMENT)
+        {
+            out.extend(self.read_environment_chunk(entry)?);
+        }
+        Ok(out)
+    }
+
     fn read_controls_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<ControlSample>> {
         let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_CONTROLS)?;
         decode_controls_payload(payload, &columns, header.sample_count as usize)
@@ -159,6 +175,11 @@ impl BinaryTelemetryReader {
     fn read_timing_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<TimingSample>> {
         let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_TIMING)?;
         decode_timing_payload(payload, &columns, header.sample_count as usize)
+    }
+
+    fn read_environment_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<EnvironmentSample>> {
+        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_ENVIRONMENT)?;
+        decode_environment_payload(payload, &columns, header.sample_count as usize)
     }
 
     fn read_chunk_raw(
@@ -522,6 +543,42 @@ fn decode_timing_payload(
             delta_lap_time_str: delta_lap_time_str[i],
             estimated_lap_time_str: estimated_lap_time_str[i],
             observed_slot_before_i_split: observed_slot_before_i_split[i],
+        });
+    }
+    Ok(out)
+}
+
+fn decode_environment_payload(
+    payload: &[u8],
+    columns: &[ColumnEntry],
+    count: usize,
+) -> TelemetryResult<Vec<EnvironmentSample>> {
+    let ticks = read_u64_column(payload, columns, COL_SAMPLE_TICK, count)?;
+    let timestamps = read_u64_column(payload, columns, COL_TIMESTAMP_NS, count)?;
+    let air_density = read_f32_column(payload, columns, COL_AIR_DENSITY, count)?;
+    let air_temp = read_f32_column(payload, columns, COL_AIR_TEMP, count)?;
+    let road_temp = read_f32_column(payload, columns, COL_ROAD_TEMP, count)?;
+    let wind_speed = read_f32_column(payload, columns, COL_WIND_SPEED, count)?;
+    let wind_direction = read_f32_column(payload, columns, COL_WIND_DIRECTION, count)?;
+    let surface_grip = read_f32_column(payload, columns, COL_SURFACE_GRIP, count)?;
+    let rain_intensity = read_i32_column(payload, columns, COL_RAIN_INTENSITY, count)?;
+    let rain_intensity_in_10min = read_i32_column(payload, columns, COL_RAIN_INTENSITY_IN_10MIN, count)?;
+    let rain_intensity_in_30min = read_i32_column(payload, columns, COL_RAIN_INTENSITY_IN_30MIN, count)?;
+
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        out.push(EnvironmentSample {
+            sample_tick: ticks[i],
+            timestamp_ns: timestamps[i],
+            air_density: air_density[i],
+            air_temp: air_temp[i],
+            road_temp: road_temp[i],
+            wind_speed: wind_speed[i],
+            wind_direction: wind_direction[i],
+            surface_grip: surface_grip[i],
+            rain_intensity: rain_intensity[i],
+            rain_intensity_in_10min: rain_intensity_in_10min[i],
+            rain_intensity_in_30min: rain_intensity_in_30min[i],
         });
     }
     Ok(out)

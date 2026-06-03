@@ -1,8 +1,8 @@
 ﻿use module_live_telemetry::{
     parse_raw_frame, shmem::AccGameStatus, shmem::AccSharedMemoryReader,
-    BinaryTelemetryReader, BinaryTelemetryWriter, ControlSample, LapIndexEntry, LiveTelemetryConfig,
-    SessionMetadata, TelemetryError, TelemetryResult,
-    TimingSample,
+    BinaryTelemetryReader, BinaryTelemetryWriter, ControlSample,
+    LapIndexEntry, LiveTelemetryConfig, SessionMetadata, SPageFileStatic,
+    TelemetryError, TelemetryResult, TimingSample,
 };
 use std::env;
 use std::fs::File;
@@ -31,6 +31,7 @@ fn run() -> TelemetryResult<()> {
         "inspect" => inspect_command(&args),
         "export" => export_command(&args),
         "laps" => laps_command(&args),
+        "session-info" => session_info_command(&args),
         "parse-raw" => parse_raw_command(&args),
         "build-lap-index" => build_lap_index_command(&args),
         "export-lap-field" => export_lap_field_command(&args),
@@ -139,6 +140,18 @@ println!("connected to ACC shared memory");
                 );
                 // Read full static page once per session
                 if let Ok(static_bytes) = active_reader.read_static_bytes() {
+                    // Parse static page for individual metadata fields
+                    let stat = SPageFileStatic::from_raw(&static_bytes);
+                    metadata.sm_version = stat.sm_version_str();
+                    metadata.ac_version = stat.ac_version_str();
+                    metadata.number_of_sessions = stat.number_of_sessions;
+                    metadata.num_cars = stat.num_cars;
+                    metadata.sector_count = stat.sector_count;
+                    metadata.max_rpm = stat.max_rpm;
+                    metadata.max_torque = stat.max_torque;
+                    metadata.max_power = stat.max_power;
+                    metadata.max_fuel = stat.max_fuel;
+                    metadata.penalties_enabled = stat.penalties_enabled;
                     metadata.raw_static_bytes = static_bytes;
                 }
                 let config = LiveTelemetryConfig {
@@ -704,7 +717,21 @@ fn parse_raw_command(args: &[String]) -> TelemetryResult<()> {
     let car = if car.is_empty() { "unknown_car".into() } else { car };
 
     let frame_size = 8 + 8 + phys_sz + graph_sz;
-    let metadata = SessionMetadata::new(&track, &car, use_hz);
+    let mut metadata = SessionMetadata::new(&track, &car, use_hz);
+    // Store full raw static page for later parsing
+    metadata.raw_static_bytes = stat_bytes.clone();
+    // Parse static page to populate individual metadata fields
+    let stat = SPageFileStatic::from_raw(&stat_bytes);
+    metadata.sm_version = stat.sm_version_str();
+    metadata.ac_version = stat.ac_version_str();
+    metadata.number_of_sessions = stat.number_of_sessions;
+    metadata.num_cars = stat.num_cars;
+    metadata.sector_count = stat.sector_count;
+    metadata.max_rpm = stat.max_rpm;
+    metadata.max_torque = stat.max_torque;
+    metadata.max_power = stat.max_power;
+    metadata.max_fuel = stat.max_fuel;
+    metadata.penalties_enabled = stat.penalties_enabled;
     let config = LiveTelemetryConfig { poll_hz: use_hz, chunk_rows };
     let mut writer = BinaryTelemetryWriter::create_file(&out, metadata, config)?;
 
@@ -835,6 +862,49 @@ fn export_lap_field_command(args: &[String]) -> TelemetryResult<()> {
     let out = optional_path(args, "--out").unwrap_or_else(|| PathBuf::from("lap_fields.csv"));
     let field_names: Vec<&str> = fields_str.split(',').map(|s| s.trim()).collect();
 
+    // Validate all field names before any file I/O
+    let valid_fields: &[&str] = &[
+        // Session
+        "status", "session", "sessionIndex", "completedLaps", "position",
+        "sessionTimeLeft", "numberOfLaps", "currentSectorIndex", "normalizedCarPosition",
+        "isInPit", "isInPitLane", "mandatoryPitDone", "missingMandatoryPits",
+        "penaltyTime", "penaltyType", "clock", "replayTimeMultiplier", "isValidLap",
+        "globalYellow", "globalYellow1", "globalYellow2", "globalYellow3",
+        "globalWhite", "globalGreen", "globalChequered", "globalRed",
+        "gapAheadOrTailValue", "flag", "gapBehind",
+        // Timing
+        "iCurrentTime", "iLastTime", "iBestTime", "iSplit", "lastSectorTime",
+        "iDeltaLapTime", "isDeltaPositive", "iEstimatedLapTime",
+        "fuelEstimatedLaps", "fuelXLap", "usedFuel", "distanceTraveled",
+        // Controls
+        "speedKmh", "gas", "brake", "clutch", "steerAngle", "gear", "rpms", "fuel",
+        "physicsPacketId", "graphicsPacketId",
+    ];
+
+    let normalize = |s: &str| -> String {
+        s.chars().filter(|c| *c != '_').collect::<String>().to_lowercase()
+    };
+
+    let lookup: std::collections::HashMap<String, &str> = valid_fields.iter()
+        .map(|&f| (normalize(f), f))
+        .collect();
+
+    let mut errors = Vec::new();
+    for fname in &field_names {
+        if valid_fields.contains(fname) {
+            continue;
+        }
+        let key = normalize(fname);
+        if let Some(suggest) = lookup.get(&key) {
+            errors.push(format!("unknown field '{}'; did you mean '{}'?", fname, suggest));
+        } else {
+            errors.push(format!("unknown field '{}'", fname));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(TelemetryError::InvalidArgument(errors.join("\n")));
+    }
+
     let reader = BinaryTelemetryReader::open(&input)?;
     let session = reader.read_all_session().unwrap_or_default();
     let timing = reader.read_all_timing().unwrap_or_default();
@@ -951,6 +1021,144 @@ fn required_string<'a>(args: &'a [String], flag: &str) -> TelemetryResult<&'a st
         .ok_or_else(|| TelemetryError::InvalidArgument(format!("missing {flag} <value>")))
 }
 
+fn session_info_command(args: &[String]) -> TelemetryResult<()> {
+    let input = required_path(args, "--input")?;
+    let reader = BinaryTelemetryReader::open(&input)?;
+    let meta = reader.metadata();
+    let summary = reader.summary();
+
+    // Parse static page if available
+    let stat = if !meta.raw_static_bytes.is_empty() {
+        Some(SPageFileStatic::from_raw(&meta.raw_static_bytes))
+    } else {
+        None
+    };
+
+    println!("=== File ===");
+    println!("file: {}", input.display());
+    println!("format: ACTL v{}", reader.header().version);
+    println!("track: {}", meta.track_name);
+    println!("car: {}", meta.car_model);
+    println!("poll_hz: {:.3}", meta.poll_hz);
+    println!("chunks: {}", summary.chunk_count);
+    println!("samples: {}", summary.total_samples);
+
+    // Game version
+    if let Some(ref s) = stat {
+        println!("sm_version: {}", s.sm_version_str());
+        println!("ac_version: {}", s.ac_version_str());
+    }
+
+    // Vehicle info from static page
+    if let Some(ref s) = stat {
+        println!("\n=== Vehicle ===");
+        println!("max_rpm: {}", s.max_rpm);
+        println!("max_power: {:.1} kW", s.max_power);
+        println!("max_torque: {:.1} Nm", s.max_torque);
+        println!("max_fuel: {:.1} L", s.max_fuel);
+        println!("max_turbo_boost: {:.1}", s.max_turbo_boost);
+        println!("suspension_max_travel: {:?}", s.suspension_max_travel);
+        println!("tyre_radius: {:?}", s.tyre_radius);
+        println!("has_drs: {}", if s.has_drs != 0 { "yes" } else { "no" });
+        println!("has_ers: {}", if s.has_ers != 0 { "yes" } else { "no" });
+        println!("has_kers: {}", if s.has_kers != 0 { "yes" } else { "no" });
+        println!("kers_max_j: {:.0}", s.kers_max_j);
+        println!("ers_max_j: {:.0}", s.ers_max_j);
+        println!("engine_brake_settings_count: {}", s.engine_brake_settings_count);
+        println!("ers_power_controller_count: {}", s.ers_power_controller_count);
+    }
+
+    // Track info
+    if let Some(ref s) = stat {
+        println!("\n=== Track ===");
+        println!("sector_count: {}", s.sector_count);
+        println!("track_configuration: {}", utf16_trim(&s.track_configuration));
+        println!("track_spline_length: {:.1}", s.track_spline_length);
+        println!("is_timed_race: {}", if s.is_timed_race != 0 { "yes" } else { "no" });
+        println!("has_extra_lap: {}", if s.has_extra_lap != 0 { "yes" } else { "no" });
+        println!("reversed_grid_positions: {}", s.reversed_grid_positions);
+        println!("pit_window_start: {}", s.pit_window_start);
+        println!("pit_window_end: {}", s.pit_window_end);
+    }
+
+    // Penalties & aids
+    if let Some(ref s) = stat {
+        println!("\n=== Rules & Aids ===");
+        println!("penalties_enabled: {}", if s.penalties_enabled != 0 { "yes" } else { "no" });
+        println!("aid_fuel_rate: {:.1}", s.aid_fuel_rate);
+        println!("aid_tire_rate: {:.1}", s.aid_tire_rate);
+        println!("aid_mechanical_damage: {:.1}", s.aid_mechanical_damage);
+        println!("aid_allow_tyre_blankets: {}", if s.aid_allow_tyre_blankets != 0 { "yes" } else { "no" });
+        println!("aid_stability: {:.1}", s.aid_stability);
+        println!("aid_auto_clutch: {}", if s.aid_auto_clutch != 0 { "yes" } else { "no" });
+        println!("aid_auto_blip: {}", if s.aid_auto_blip != 0 { "yes" } else { "no" });
+    }
+
+    // Tyres
+    if let Some(ref s) = stat {
+        println!("\n=== Tyres ===");
+        println!("dry_tyres_name: {}", utf16_trim(&s.dry_tyres_name));
+        println!("wet_tyres_name: {}", utf16_trim(&s.wet_tyres_name));
+    }
+
+    // First session sample for runtime info
+    let session_samples = reader.read_all_session().unwrap_or_default();
+    if let Some(first) = session_samples.first() {
+        let session_label = match first.session {
+            0 => "PRACTICE",
+            1 => "QUALIFY",
+            2 => "RACE",
+            3 => "HOTLAP",
+            4 => "TIME_ATTACK",
+            5 => "DRIFT",
+            6 => "DRAG",
+            7 => "HOTSTINT",
+            8 => "HOTLAP_SUPERPOLE",
+            _ => "UNKNOWN",
+        };
+        let status_label = match first.status {
+            0 => "OFF",
+            1 => "REPLAY",
+            2 => "LIVE",
+            3 => "PAUSE",
+            _ => "UNKNOWN",
+        };
+        println!("\n=== Session ===");
+        println!("session_type: {} ({})", session_label, first.session);
+        println!("status: {} ({})", status_label, first.status);
+        println!("session_index: {}", first.session_index);
+        println!("number_of_laps: {}", first.number_of_laps);
+        println!("clock: {:.3}s", first.clock);
+        println!("session_time_left: {:.3}s", first.session_time_left);
+    }
+
+    // Environment (first sample)
+    let env_samples = reader.read_all_environment().unwrap_or_default();
+    if let Some(first) = env_samples.first() {
+        println!("\n=== Weather ===");
+        println!("air_temp: {:.1} C", first.air_temp);
+        println!("road_temp: {:.1} C", first.road_temp);
+        println!("air_density: {:.4}", first.air_density);
+        println!("wind_speed: {:.1} m/s", first.wind_speed);
+        println!("wind_direction: {:.1} deg", first.wind_direction);
+        println!("surface_grip: {:.2}", first.surface_grip);
+        println!("rain_intensity: {}", first.rain_intensity);
+        println!("rain_intensity_10min: {}", first.rain_intensity_in_10min);
+        println!("rain_intensity_30min: {}", first.rain_intensity_in_30min);
+    }
+
+    Ok(())
+}
+
+fn utf16_trim(arr: &[u16]) -> String {
+    String::from_utf16_lossy(
+        &arr.iter()
+            .take_while(|&&c| c != 0)
+            .copied()
+            .collect::<Vec<u16>>(),
+    )
+}
+
 fn print_usage() {
     println!(
         "ACC live telemetry\n\n\
@@ -960,6 +1168,7 @@ record-raw --out <file> [--poll-hz 120] [--status-interval-ms 2000]\n  \
 inspect --input <file>\n  \
 export --input <file> [--out <file>] [--format csv]\n  \
 laps --input <file>\n  \
+session-info --input <file>\n  \
 parse-raw --input <file> --out <file> [--poll-hz 120] [--chunk-rows 256]\n  \
 build-lap-index --input <file>\n  \
 export-lap-field --input <file> --lap <N> --fields <f1,f2,...> [--out <file>]\n  \

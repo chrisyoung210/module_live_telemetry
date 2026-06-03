@@ -12,5 +12,5 @@ pub use types::{
     OtherCarsSample, PowertrainSample, RecordingSummary, SessionMetadata, SessionSample,
     TimingSample, TyreSample, CLUSTER_CONTROLS,
 };
-pub use shmem::{parse_raw_frame, RAW_GRAPHICS_SIZE, RAW_PHYSICS_SIZE, RAW_STATIC_SIZE};
+pub use shmem::{parse_raw_frame, SPageFileStatic, RAW_GRAPHICS_SIZE, RAW_PHYSICS_SIZE, RAW_STATIC_SIZE};
 pub use writer::{BinaryTelemetryWriter, LiveTelemetryConfig, TelemetryFrame};
