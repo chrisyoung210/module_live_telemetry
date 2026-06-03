@@ -15,6 +15,7 @@ pub const CHUNK_HEADER_SIZE: u16 = 72;
 pub const COLUMN_ENTRY_SIZE: usize = 40;
 pub const INDEX_MAGIC: [u8; 4] = *b"INDX";
 pub const FOOTER_MAGIC: [u8; 4] = *b"FOOT";
+pub const LAP_INDEX_MAGIC: [u8; 4] = *b"LAPS";
 pub const META_MAGIC: [u8; 4] = *b"META";
 pub const SCHEMA_MAGIC: [u8; 4] = *b"SCHM";
 
@@ -151,6 +152,8 @@ pub const COL_GLOBAL_GREEN: u16 = 114;
 pub const COL_GLOBAL_CHEQUERED: u16 = 115;
 pub const COL_GLOBAL_RED: u16 = 116;
 pub const COL_GAP_AHEAD_OR_TAIL: u16 = 117;
+pub const COL_FLAG: u16 = 118;
+pub const COL_GAP_BEHIND: u16 = 119;
 
 // Timing (0x0600)
 pub const COL_I_CURRENT_TIME: u16 = 120;
@@ -348,7 +351,7 @@ pub const POWERTRAIN_COLUMNS: [ColumnSpec; 24] = [
     ColumnSpec::new(COL_WATER_TEMP, "waterTemp", TYPE_F32),
 ];
 
-pub const SESSION_COLUMNS: [ColumnSpec; 30] = [
+pub const SESSION_COLUMNS: [ColumnSpec; 32] = [
     ColumnSpec::new(COL_SAMPLE_TICK, "sampleTick", TYPE_U64),
     ColumnSpec::new(COL_TIMESTAMP_NS, "timestampNs", TYPE_U64),
     ColumnSpec::new(COL_STATUS, "status", TYPE_I32),
@@ -379,6 +382,8 @@ pub const SESSION_COLUMNS: [ColumnSpec; 30] = [
     ColumnSpec::new(COL_GLOBAL_CHEQUERED, "globalChequered", TYPE_I32),
     ColumnSpec::new(COL_GLOBAL_RED, "globalRed", TYPE_I32),
     ColumnSpec::new(COL_GAP_AHEAD_OR_TAIL, "gapAheadOrTailValue", TYPE_I32),
+    ColumnSpec::new(COL_FLAG, "flag", TYPE_I32),
+    ColumnSpec::new(COL_GAP_BEHIND, "gapBehind", TYPE_I32),
 ];
 
 pub const TIMING_COLUMNS: [ColumnSpec; 21] = [

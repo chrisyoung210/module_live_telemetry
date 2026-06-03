@@ -1,354 +1,78 @@
-# ACC Live Telemetry Binary Protocol v1
+# ACC Live Telemetry Data Protocol v3
 
 > Status: current protocol for `module_live_telemetry`.
-> Extension: `.acctlm`
-> Format name: ACTL, short for ACC Coach Telemetry Log.
+> Extension: `.acctlm` / `.accraw`
+> ACTL v2 + metadata v4 + lap index.
 
-## 1. Scope
+## 1. Data Families
 
-This project stores telemetry only as ACTL binary files. The recording hot path writes structured binary blocks with fixed little-endian fields, chunk payload checksums, and a footer index. Future recording formats should extend ACTL with new clusters, columns, or schema versions instead of adding another storage format.
+### ACTL Binary Files (`.acctlm`)
 
-The current implementation supports two data families:
+9 clusters × 120 Hz per-frame decoding:
 
-| Cluster | ID | Writer | Reader API | Purpose |
-|---|---:|---|---|---|
-| `controls` | `0x0100` | `BinaryTelemetryWriter` | `read_all_controls()` | Compact driving controls and core car state |
-| `raw_pages` | `0x0200` | `RawPageTelemetryWriter` | `read_all_raw_graphics_samples()`, `read_all_raw_graphics_pages()` | Byte-for-byte ACC shared-memory pages |
+| Cluster | ID | Columns | Key Fields |
+|---|---:|---|---|
+| Controls | 0x0100 | 12 | speed_kmh, gas, brake, gear, rpms, fuel |
+| Motion | 0x0200 | 9 | velocity, acc_g, heading, pitch, roll |
+| Tyres | 0x0300 | 31 | wheel_slip, tyre_wear, brake_temp, camber_rad |
+| Powertrain | 0x0400 | 24 | turbo_boost, kers_charge, drs, engine_brake |
+| Session | 0x0500 | 32 | normalized_car_position, is_valid_lap, flag, gap_behind, global flags |
+| Timing | 0x0600 | 21 | i_current_time, i_last_time, i_best_time, i_split |
+| CarState | 0x0700 | 42 | car_damage, pit_limiter, tc_level, abs_level, engine_map |
+| Environment | 0x0800 | 11 | air_temp, road_temp, wind_speed, rain_intensity |
+| OtherCars | 0x0900 | 6 | car_coordinates[60], car_id[60], active_cars |
 
-`record-auto` currently records the `raw_pages` cluster. `generate-mock` records the compact `controls` cluster.
+Total: 186 columns per frame, 168 unique data fields.
 
-## 2. Encoding Rules
+### Raw Binary Files (`.accraw`)
 
-- All integer and floating-point values are little-endian.
-- Strings in protocol blocks are UTF-8 bytes with explicit lengths.
-- Timestamps are unsigned nanoseconds.
-- `poll_hz` is stored as `poll_hz_x1000`, for example `120.0 Hz` is `120000`.
-- Raw ACC shared-memory pages are preserved byte-for-byte.
-- The hot path writes complete chunks. A finished file adds a footer index; an unfinished file can still be recovered by scanning chunks from `first_chunk_offset`.
-- Every chunk payload has a CRC32 checksum using the standard polynomial implemented in `format::crc32`.
+Complete ACC shared memory pages per frame:
 
-## 3. File Layout
-
-```text
-+------------------------------+
-| FileHeader                   | fixed 128 bytes
-+------------------------------+
-| SchemaBlock                  | starts at header.schema_offset
-+------------------------------+
-| MetadataBlock                | starts at header.metadata_offset
-+------------------------------+
-| ChunkRecord 0                | starts at header.first_chunk_offset
-+------------------------------+
-| ChunkRecord 1                |
-+------------------------------+
-| ...                          |
-+------------------------------+
-| ChunkIndex                   | starts at header.footer_offset after finish
-+------------------------------+
-| FileFooter                   |
-+------------------------------+
-```
-
-`footer_offset = 0` means the file was not finalized. The reader then scans sequential `CHNK` records until it reaches a non-chunk block or end of file.
-
-## 4. FileHeader
-
-The file starts with a 128-byte header.
-
-| Field | Type | Description |
-|---|---|---|
-| `magic` | `[u8; 8]` | `ACTL\r\n\x1A\n` |
-| `version` | `u16` | Current value: `1` |
-| `header_size` | `u16` | Current value: `128` |
-| `flags` | `u32` | Reserved, currently `0` |
-| `schema_offset` | `u64` | Offset of `SchemaBlock`; current value is `128` |
-| `metadata_offset` | `u64` | Offset of `MetadataBlock` |
-| `first_chunk_offset` | `u64` | Offset of first `ChunkRecord` |
-| `footer_offset` | `u64` | Offset of `ChunkIndex`; `0` while recording or after an unclean shutdown |
-| `created_unix_ns` | `u64` | Creation time in Unix nanoseconds |
-| `timebase_hz` | `u32` | Current value: `1_000_000_000` |
-| `poll_hz_x1000` | `u32` | Polling rate multiplied by `1000` |
-| `reserved` | `[u8; 64]` | Must be zero when written; readers ignore it |
-
-## 5. SchemaBlock
-
-The schema block lets a reader discover which clusters and columns are present.
-
-```text
-schema_magic      [u8; 4]  "SCHM"
-schema_hash       u64      current value: 0x4143544c00000001
-cluster_count     u16
-repeat cluster_count:
-  cluster_id      u16
-  column_count    u16
-  repeat column_count:
-    column_id     u16
-    value_type    u8
-    name_len      u8
-    name_bytes    [name_len] UTF-8
-```
-
-Current value types:
-
-| Value | Name | Meaning |
-|---:|---|---|
-| `1` | `u64` | Unsigned 64-bit integer |
-| `2` | `f32` | 32-bit float |
-| `3` | `i32` | Signed 32-bit integer |
-| `4` | `bytes` | Fixed-size byte pages inside a chunk |
-
-Current schema hash is fixed by `format::SCHEMA_HASH`. Increment it when published column IDs, value types, or cluster semantics change incompatibly.
-
-## 6. MetadataBlock
-
-```text
-metadata_magic    [u8; 4]  "META"
-created_unix_ns   u64
-poll_hz_x1000     u32
-chunk_rows        u32
-track_len         u16
-car_len           u16
-track_name        [track_len] UTF-8
-car_model         [car_len] UTF-8
-```
-
-`track_name` and `car_model` are taken from ACC static shared memory when available. Empty or unknown shared-memory values are normalized to fallback names by the shared-memory reader.
-
-## 7. ChunkRecord
-
-Each chunk belongs to exactly one cluster. Payloads are columnar: all values for column A are stored contiguously, then all values for column B, and so on.
-
-```text
-chunk_magic       [u8; 4]  "CHNK"
-header_size       u16      current value: 72
-cluster_id        u16
-chunk_seq         u32
-schema_hash       u64
-base_sample_tick  u64
-sample_stride     u32
-sample_count      u32
-start_time_ns     u64
-end_time_ns       u64
-start_lap         i32      currently -1 when not populated
-end_lap           i32      currently -1 when not populated
-column_count      u16
-flags             u16      reserved, currently 0
-payload_len       u32
-payload_crc32     u32
-repeat column_count:
-  ColumnEntry
-payload           [payload_len]
-```
-
-`sample_stride` is inferred from the first two sample ticks in the chunk. If the chunk has fewer than two samples, it is `1`.
-
-### ColumnEntry
-
-Each column entry is 40 bytes.
-
-| Field | Type | Description |
-|---|---|---|
-| `column_id` | `u16` | Stable column identifier |
-| `codec` | `u8` | Current value: `0`, plain little-endian |
-| `value_type` | `u8` | One of the schema value types |
-| `lane_count` | `u8` | Current value: `1` |
-| `flags` | `u8` | Reserved, currently `0` |
-| `offset` | `u32` | Byte offset inside payload |
-| `byte_len` | `u32` | Byte length of this column in payload |
-| `null_offset` | `u32` | Current value: `0`; reserved for future null bitmaps |
-| `min_value` | `f64` | Numeric min for the chunk, or `0` for byte pages |
-| `max_value` | `f64` | Numeric max for the chunk, or `0` for byte pages |
-| `reserved` | `[u8; 6]` | Must be zero when written; readers ignore it |
-
-## 8. `controls` Cluster
-
-Cluster ID: `0x0100`
-
-The compact controls cluster stores a small, analysis-friendly subset of telemetry.
-
-| Column ID | Name | Type | Source |
-|---:|---|---|---|
-| `1` | `sampleTick` | `u64` | Recorder sample counter |
-| `2` | `timestampNs` | `u64` | Recorder monotonic timestamp |
-| `10` | `speedKmh` | `f32` | ACC physics `speed_kmh` |
-| `11` | `gas` | `f32` | ACC physics `gas` |
-| `12` | `brake` | `f32` | ACC physics `brake` |
-| `13` | `clutch` | `f32` | ACC physics `clutch` |
-| `14` | `steerAngle` | `f32` | ACC physics `steer_angle` raw ratio |
-| `15` | `gear` | `i32` | ACC physics `gear` |
-| `16` | `rpms` | `i32` | ACC physics `rpms` |
-| `17` | `fuel` | `f32` | ACC physics `fuel` |
-
-Payload order:
-
-```text
-sampleTick[0..count)     u64
-timestampNs[0..count)    u64
-speedKmh[0..count)       f32
-gas[0..count)            f32
-brake[0..count)          f32
-clutch[0..count)         f32
-steerAngle[0..count)     f32
-gear[0..count)           i32
-rpms[0..count)           i32
-fuel[0..count)           f32
-```
-
-The current implementation does not clamp or normalize these values before writing.
-
-## 9. `raw_pages` Cluster
-
-Cluster ID: `0x0200`
-
-This cluster preserves the ACC shared-memory pages for later decoding and re-interpretation.
-
-| Column ID | Name | Type | Source |
-|---:|---|---|---|
-| `1001` | `sampleTick` | `u64` | Recorder sample counter |
-| `1002` | `timestampNs` | `u64` | Recorder monotonic timestamp |
-| `1003` | `rawPhysicsPage` | `bytes` | `Local\acpmf_physics` |
-| `1004` | `rawGraphicsPage` | `bytes` | `Local\acpmf_graphics` |
-| `1005` | `rawStaticPage` | `bytes` | `Local\acpmf_static` |
-
-Payload order:
-
-```text
-sampleTick[0..count)                 u64
-timestampNs[0..count)                u64
-rawPhysicsPage[0..count)             fixed bytes per sample
-rawGraphicsPage[0..count)            fixed bytes per sample
-rawStaticPage[0..count)              fixed bytes per sample
-```
-
-The writer requires stable page sizes for the whole file. On Windows, current page sizes are:
-
-| Page | Bytes | Flattened fields | Notes |
-|---|---:|---:|---|
-| Physics | `800` | `200` | Full `SPageFilePhysicsControls` prefix used by the project |
-| Graphics | `1584` | `472` | Full `SPageFileGraphicsRaw` prefix used by the project |
-| Static | `200` | `98` | Static identity prefix used for track and car metadata |
-
-See `RAW_TELEMETRY_FIELDS.md` for field offsets inside these raw pages.
-
-## 10. ChunkIndex and FileFooter
-
-After all chunks have been written, `finish()` appends an index and footer.
-
-```text
-index_magic       [u8; 4]  "INDX"
-entry_count       u64
-repeat entry_count:
-  cluster_id      u16
-  reserved        u16
-  chunk_seq       u32
-  file_offset     u64
-  byte_len        u32
-  reserved        u32
-  start_time_ns   u64
-  end_time_ns     u64
-  start_tick      u64
-  end_tick        u64
-footer_magic      [u8; 4]  "FOOT"
-index_offset      u64
-total_samples     u64
-chunk_count       u32
-reserved          u32
-```
-
-The header is then rewritten with `footer_offset = index_offset`.
-
-## 11. Shared-Memory Recording Rules
-
-`record-auto` uses the Windows shared-memory reader:
-
-1. Open physics, graphics, and static shared-memory mappings.
-2. Wait until ACC graphics status is `LIVE`.
-3. Start a new `.acctlm` file with track and car metadata from the static page.
-4. Record one raw sample per new physics `packet_id`.
-5. While ACC is `PAUSE`, keep the file open but do not append samples.
-6. On session end, shared-memory loss, or read failure after recording starts, finish the file and write the footer index.
-
-Default CLI settings:
-
-| Setting | Default |
-|---|---:|
-| `poll_hz` | `120.0` |
-| `chunk_rows` for `record-auto` | `256` |
-| `chunk_rows` for `generate-mock` | `256` |
-| `flush_interval_ms` for `record-auto` | `2000` |
-| Output directory | `.\data` |
-
-`record-auto` periodically calls `flush_to_disk()`, which emits any pending raw samples as a recoverable chunk and flushes the file handle. Use `--flush-interval-ms 0` to disable periodic flush.
-
-Default live recording file name:
-
-```text
-live_{unix_secs}_{track}_{car}.acctlm
-```
-
-## 12. Reader Behavior
-
-`BinaryTelemetryReader::from_bytes` validates:
-
-- ACTL magic.
-- Supported format version.
-- Header size.
-- Header offsets.
-- Schema block magic and schema hash.
-- Metadata block magic.
-- Footer index when `footer_offset > 0`.
-- Chunk payload CRC before decoding a chunk.
-
-If the footer is missing, the reader scans chunks starting at `first_chunk_offset` and builds an in-memory index from valid chunk headers.
-
-## 13. Session and Lap Segmentation
-
-The reader can derive a session outline from the raw graphics page stream:
-
-```rust
-pub fn segment_raw_session(&self) -> TelemetryResult<RawSessionSegments>;
-```
-
-`RawSessionSegments` contains:
-
-| Field | Meaning |
+| Item | Size |
 |---|---|
-| `metadata` | Track, car, creation time, poll rate, and chunk rows |
-| `session_type` | Raw graphics `session` value from offset `8` |
-| `session_kind` | Best-effort label such as `practice`, `qualify`, `race`, or `hotlap` |
-| `sample_count` | Number of decoded raw graphics samples |
-| `start_time_ns` / `end_time_ns` | Session sample time range |
-| `laps` | One `RawLapSegment` per detected lap or partial lap |
+| File header | 28 bytes |
+| Static page (once) | ~684 bytes |
+| Per frame: tick + ns + physics + graphics | ~2380 bytes |
 
-Each `RawLapSegment` stores a half-open sample range `[start_sample_index, end_sample_index)`, ACC `completed_laps` range, tick range, time range, lap completion reason, lap time when complete, validity when known, normalized position range, distance range, and the dynamic clusters available for that lap. The current implementation has `raw_pages` as the available dynamic cluster; future compact clusters can use the same tick/time ranges.
+Supports re-parsing with updated struct definitions without re-recording.
 
-Lap boundaries are detected from raw graphics samples by:
+## 2. Metadata
 
-- `current_lap_time_ms` resetting from more than `10_000 ms` to less than `2_000 ms`.
-- `completed_laps` changing when no nearby reset boundary was already detected.
+Session-level information stored once per file in the Metadata Block. Backward-compatible with versioned extensions:
 
-Adjacent reset/completed-lap changes are de-duplicated so one finish line crossing produces one segment boundary.
+| Version | Fields | Size |
+|---|---|---|
+| v1 | track_name, car_model, poll_hz, chunk_rows | base |
+| v2 | sm_version, ac_version, number_of_sessions, num_cars | +variable |
+| v3 | sector_count, max_rpm, max_torque, max_power, max_fuel, penalties_enabled | +24 bytes |
+| v4 | raw_static_bytes (full SPageFileStatic, 47 fields, ~684 bytes) | +variable |
 
-## 14. CLI Commands
+## 3. Lap Index
 
-```powershell
-cargo run --bin acc-live-telemetry -- generate-mock --out .\data\mock.acctlm --samples 1000
-cargo run --bin acc-live-telemetry -- record-auto --out-dir .\data --poll-hz 120 --chunk-rows 256 --flush-interval-ms 2000
-cargo run --bin acc-live-telemetry -- inspect --input .\data\live_...acctlm
-cargo run --bin acc-live-telemetry -- export --input .\data\mock.acctlm --out .\data\mock.csv --format csv
-cargo run --bin acc-live-telemetry -- raw-info
-cargo run --bin acc-live-telemetry -- raw-laps --input .\data\live_...acctlm
-cargo run --bin acc-live-telemetry -- raw-lap-segments --input .\data\live_...acctlm
-cargo run --bin acc-live-telemetry -- raw-valid-scan --input .\data\live_...acctlm
-```
+Optional block appended after the file Footer. Enables O(1) random access to lap boundaries without scanning session data.
 
-`export` currently reads the compact `controls` cluster. Files recorded by `record-auto` contain `raw_pages`; those are inspected through the raw page reader APIs and raw analysis commands.
+| Magic | Count | Per Lap Entry (32 bytes) |
+|---|---|---|
+| "LAPS" | u32 | lap_number(i32) + start_tick(u64) + end_tick(u64) + sample_count(u32) + is_valid(i32) + is_out_lap(i32) |
 
-## 15. Extension Rules
+Auto-generated by `record` command. Manual: `build-lap-index --input <file>`.
 
-- Add new telemetry by introducing a new cluster or appending new column IDs to an existing cluster.
-- Do not reuse column IDs after publishing them.
-- Readers must skip unknown clusters and columns when possible.
-- Bump `SCHEMA_HASH` for incompatible schema changes.
-- Bump `FORMAT_VERSION` only when the top-level file layout or existing field semantics become incompatible.
-- Prefer raw facts in recording clusters. Derived values should be computed on read or written to an explicitly derived cluster in a later protocol revision.
+## 4. Commands
+
+| Command | Description |
+|---|---|
+| `record` | Record from ACC → `.acctlm` (auto-builds lap index) |
+| `record-raw` | Record ACC memory pages → `.accraw` (static page written once) |
+| `parse-raw` | `.accraw` → `.acctlm` (re-parse with current struct) |
+| `inspect` | View file metadata and chunk index |
+| `export` | Export controls to CSV |
+| `laps` | Display lap summary (times, validity) |
+| `build-lap-index` | Append lap index to existing file |
+| `export-lap-field` | Export specific fields per lap to CSV |
+
+## 5. Backward Compatibility
+
+- New columns (`flag`, `gap_behind`) use `read_i32_column_opt` → missing in old files → default 0
+- Metadata v3/v4 extensions detected by remaining byte count → old files → default values
+- Lap index uses "LAPS" magic → old files without index → reader returns empty
+- `.accraw` stores page sizes in header → parse-raw adapts to any ACC version

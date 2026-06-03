@@ -1,8 +1,8 @@
 # ACC Live Telemetry Binary Format Design
 
-> Status: design and implementation notes for ACTL v1.
+> Status: design and implementation notes for ACTL v2 (updated 2026-06-02).
 > Target crate: `module_live_telemetry`
-> File extension: `.acctlm`
+> File extension: `.acctlm` / `.accraw`
 
 ## 1. Design Direction
 
@@ -11,7 +11,7 @@
 The recording format is ACTL: a chunked, clustered, columnar binary file.
 
 - `chunked`: samples are buffered and written in bounded groups such as 256, 512, or 1024 rows.
-- `clustered`: related fields live together, for example `controls` or `raw_pages`.
+- `clustered`: related fields live together, for example `controls` or `motion`.
 - `columnar`: inside one chunk, each column is contiguous.
 - `indexed`: a finished file has a footer index for fast chunk discovery.
 - `schema-driven`: the file declares clusters and columns so future readers can skip unknown data.
@@ -25,19 +25,18 @@ The crate currently implements:
 | Area | Status | Main code |
 |---|---|---|
 | File header, schema, metadata, chunk headers, index, footer | Implemented | `src/format.rs` |
-| Compact controls writer | Implemented | `src/writer.rs` |
-| Raw shared-memory page writer | Implemented | `src/raw_writer.rs` |
+| Binary writer (all clusters) | Implemented | `src/writer.rs` |
 | Binary reader and recovery scan | Implemented | `src/reader.rs` |
-| Raw session/lap segmentation | Implemented | `src/laps.rs` |
+| Lap boundary detection and indexing | Implemented | `src/bin/acc-live-telemetry.rs` (`laps`, `build-lap-index`) |
 | ACC Windows shared-memory reader | Implemented | `src/shmem.rs` |
 | CLI commands | Implemented | `src/bin/acc-live-telemetry.rs` |
 | More analysis clusters | Not implemented | Future work |
 | Batch query API | Not implemented | Future work |
 | Derived-value compute layer | Not implemented | Future work |
 
-The active live recorder, `record-auto`, writes `raw_pages` chunks. This intentionally preserves the highest-fidelity source data first; more compact analysis views can be produced later from the raw pages.
+The `record` command writes all 9 telemetry clusters into `.acctlm` files. The `record-raw` command stores raw ACC shared-memory pages into `.accraw` files for later re-parsing.
 
-## 3. Non-Goals for ACTL v1
+## 3. Non-Goals for ACTL v2
 
 - No per-sample text object format.
 - No general-purpose compression in the live hot path.
@@ -83,7 +82,7 @@ The header is fixed at 128 bytes so a reader can open the file with one small re
 
 ## 6. Schema Design
 
-ACTL v1 has a compact schema block:
+ACTL v2 has a compact schema block:
 
 ```text
 "SCHM"
@@ -112,30 +111,26 @@ These additions should be made in a format version bump if they change the schem
 
 ## 7. Cluster Plan
 
-Current cluster IDs:
+All 9 clusters are implemented:
 
 | Cluster ID | Name | Status | Purpose |
 |---:|---|---|---|
-| `0x0100` | `controls` | Implemented | Compact core driving controls |
-| `0x0200` | `raw_pages` | Implemented | Byte-for-byte ACC physics, graphics, and static pages |
+| `0x0100` | `controls` | Implemented | Compact core driving controls (speed, gas, brake, gear, rpms, fuel) |
+| `0x0200` | `motion` | Implemented | Velocity, acceleration, heading, pitch, roll |
+| `0x0300` | `tyres` | Implemented | Slip, load, pressure, wear, temperatures per wheel |
+| `0x0400` | `powertrain` | Implemented | Turbo boost, KERS, DRS, engine brake, water temp |
+| `0x0500` | `session` | Implemented | Lap state, sectors, position, track status, flags, gap |
+| `0x0600` | `timing` | Implemented | Lap times, split times, delta, fuel estimates |
+| `0x0700` | `car_state` | Implemented | Damage, pit limiter, TC/ABS, engine map, ride height |
+| `0x0800` | `environment` | Implemented | Air/road temp, wind, rain, surface grip |
+| `0x0900` | `other_cars` | Implemented | Car coordinates, car IDs, active cars count |
 
-Potential future clusters:
+Potential additions through format version bumps:
 
-| Cluster ID | Name | Source | Typical fields |
-|---:|---|---|---|
-| `0x0110` | `motion` | Raw physics | Velocity, acceleration, local angular velocity, heading, pitch, roll |
-| `0x0120` | `tyres` | Raw physics | Slip, load, pressure, angular speed, wear, temperatures |
-| `0x0130` | `brakes` | Raw physics | Brake pressure, brake temperature, brake bias, pad life, disc life |
-| `0x0140` | `powertrain` | Raw physics | Turbo boost, water temperature, engine map, max RPM, engine state |
-| `0x0150` | `assists_status` | Raw physics and graphics | TC, ABS, intervention flags, pit limiter, tyres out |
-| `0x0160` | `session_track` | Raw graphics and static | Lap state, sectors, position, track status, weather |
-| `0x0170` | `damage` | Raw physics | Body and suspension damage |
-| `0x0180` | `contact_patch` | Raw physics | Tyre contact point, normal, and heading vectors |
-| `0x0300` | `derived_driver` | Computed | Throttle percentage, brake percentage, steering degrees, wheel speeds |
-| `0x0310` | `derived_lap` | Computed | Lap distance, reference delta, predicted lap time |
-| `0x8000..` | user extensions | External | Experiment or plugin data |
-
-Design rule: raw clusters should preserve source facts. Derived clusters should clearly name their compute pipeline and inputs.
+| Area | Description |
+|---|---|
+| Derived/driver coaching | Lap distance, reference delta, predicted lap time |
+| User extensions | Plugin or experiment data (cluster ID range `0x8000..`)
 
 ## 8. Chunk Design
 
@@ -155,7 +150,7 @@ The column directory stores offsets and lengths for each column. This lets a rea
 
 ## 9. Codec Strategy
 
-ACTL v1 uses only codec `0`, plain little-endian bytes.
+ACTL v2 uses only codec `0`, plain little-endian bytes.
 
 Future codecs can be added per column or per payload:
 
@@ -182,15 +177,14 @@ Recommended live flow:
 6. Periodically flush pending samples into recoverable chunks and flush the file handle.
 7. On finish, append index and footer, then rewrite the header with `footer_offset`.
 
-Current `record-auto` follows the same shape, writes only the `raw_pages` cluster, and defaults to `--flush-interval-ms 2000`. Setting `--flush-interval-ms 0` disables periodic flush.
+Current `record` command writes all 9 telemetry clusters, and defaults to `--flush-interval-ms 2000`. Setting `--flush-interval-ms 0` disables periodic flush.
 
 Recommended defaults:
 
 | Setting | Default |
 |---|---:|
 | `poll_hz` | `120` |
-| `raw_pages.chunk_rows` | `256` |
-| `controls.chunk_rows` | `256` for CLI mock generation, `1024` for library default |
+| `chunk_rows` | `256` for CLI, `1024` for library default |
 | `status_interval_ms` | `2000` |
 | `flush_interval_ms` | `2000` |
 

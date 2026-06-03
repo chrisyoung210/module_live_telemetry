@@ -1,6 +1,7 @@
 /target/
 /dist/
 /data/*.acctlm
+/data/*.accraw
 /data/*.csv
 /.codegraph/
 /backup_data/

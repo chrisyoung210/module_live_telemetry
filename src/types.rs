@@ -20,6 +20,15 @@ pub struct SessionMetadata {
     pub ac_version: String,
     pub number_of_sessions: i32,
     pub num_cars: i32,
+    // v3 extended static fields
+    pub sector_count: i32,
+    pub max_rpm: i32,
+    pub max_torque: f32,
+    pub max_power: f32,
+    pub max_fuel: f32,
+    pub penalties_enabled: i32,
+    /// Full raw static page bytes (v4); empty for old files
+    pub raw_static_bytes: Vec<u8>,
 }
 
 impl SessionMetadata {
@@ -34,6 +43,13 @@ impl SessionMetadata {
             ac_version: String::new(),
             number_of_sessions: 0,
             num_cars: 0,
+            sector_count: 0,
+            max_rpm: 0,
+            max_torque: 0.0,
+            max_power: 0.0,
+            max_fuel: 0.0,
+            penalties_enabled: 0,
+            raw_static_bytes: Vec::new(),
         }
     }
 }
@@ -215,6 +231,8 @@ pub struct SessionSample {
     pub global_chequered: i32,
     pub global_red: i32,
     pub gap_ahead_or_tail_value: i32,
+    pub flag: i32,
+    pub gap_behind: i32,
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +354,17 @@ pub struct RecordingSummary {
     pub footer_offset: u64,
 }
 
+// Lap index entry (stored in file footer after FOOT block)
+#[derive(Debug, Clone, Copy)]
+pub struct LapIndexEntry {
+    pub lap_number: i32,
+    pub start_tick: u64,
+    pub end_tick: u64,
+    pub sample_count: u32,
+    pub is_valid: i32,
+    pub is_out_lap: i32,
+}
+
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // ACC session kind
@@ -402,7 +431,7 @@ impl Default for PowertrainSample {
     fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, turbo_boost: 0.0, ballast: 0.0, kers_charge: 0.0, kers_input: 0.0, kers_current_kj: 0.0, drs: 0.0, tc: 0.0, abs: 0.0, engine_brake: 0, ers_recovery_level: 0, ers_power_level: 0, ers_heat_charging: 0, ers_is_charging: 0, drs_available: 0, drs_enabled: 0, tc_in_action: 0, abs_in_action: 0, auto_shifter_on: 0, current_max_rpm: 0, p2p_activations: 0, p2p_status: 0, water_temp: 0.0 } }
 }
 impl Default for SessionSample {
-    fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, status: 0, session: 0, session_index: 0, completed_laps: 0, position: 0, session_time_left: 0.0, number_of_laps: 0, current_sector_index: 0, normalized_car_position: 0.0, is_in_pit: 0, is_in_pit_lane: 0, mandatory_pit_done: 0, missing_mandatory_pits: 0, penalty_time: 0.0, penalty_type: 0, track_status: [0u16; 33], clock: 0.0, replay_time_multiplier: 0.0, is_valid_lap: 0, global_yellow: 0, global_yellow1: 0, global_yellow2: 0, global_yellow3: 0, global_white: 0, global_green: 0, global_chequered: 0, global_red: 0, gap_ahead_or_tail_value: 0 } }
+    fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, status: 0, session: 0, session_index: 0, completed_laps: 0, position: 0, session_time_left: 0.0, number_of_laps: 0, current_sector_index: 0, normalized_car_position: 0.0, is_in_pit: 0, is_in_pit_lane: 0, mandatory_pit_done: 0, missing_mandatory_pits: 0, penalty_time: 0.0, penalty_type: 0, track_status: [0u16; 33], clock: 0.0, replay_time_multiplier: 0.0, is_valid_lap: 0, global_yellow: 0, global_yellow1: 0, global_yellow2: 0, global_yellow3: 0, global_white: 0, global_green: 0, global_chequered: 0, global_red: 0, gap_ahead_or_tail_value: 0, flag: 0, gap_behind: 0 } }
 }
 impl Default for TimingSample {
     fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, i_current_time: 0, i_last_time: 0, i_best_time: 0, i_split: 0, last_sector_time: 0, i_delta_lap_time: 0, is_delta_positive: 0, i_estimated_lap_time: 0, fuel_estimated_laps: 0.0, fuel_x_lap: 0.0, used_fuel: 0.0, distance_traveled: 0.0, current_time_str: [0u16; 15], last_time_str: [0u16; 15], best_time_str: [0u16; 15], split_str: [0u16; 15], delta_lap_time_str: [0u16; 15], estimated_lap_time_str: [0u16; 15], observed_slot_before_i_split: 0 } }

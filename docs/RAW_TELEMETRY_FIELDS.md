@@ -1,8 +1,9 @@
 # ACC Raw Telemetry Field Map
 
-> Status: current implementation reference.
-> Format: ACTL raw page cluster (`cluster_id = 0x0200`).
-> Scope: fields saved by `record-auto` in `module_live_telemetry`.
+> Status: current implementation reference (updated 2026-06-03).
+> Struct: fixed `SPageFileGraphicsRaw` with `penalty` field at offset `1228`.
+> Format: ACC raw shared-memory page dump (`.accraw` file format).
+> Scope: fields saved by `record-raw` in `module_live_telemetry`.
 
 ## Summary
 
@@ -13,23 +14,20 @@ Each recorded raw sample stores three byte-for-byte shared-memory pages plus two
 | `sampleTick` | 8 | 1 | Recorder sample counter / 录制样本序号 |
 | `timestampNs` | 8 | 1 | Recorder monotonic timestamp in ns / 录制单调时间戳，纳秒 |
 | `rawPhysicsPage` | 800 | 200 | `Local\acpmf_physics` raw page / 物理共享内存原始页 |
-| `rawGraphicsPage` | 1584 | 472 | `Local\acpmf_graphics` raw page / 图形共享内存原始页 |
+| `rawGraphicsPage` | 1588 | 86 | `Local\acpmf_graphics` raw page / 图形共享内存原始页 |
 | `rawStaticPage` | 200 | 98 | current static identity prefix from `Local\acpmf_static` / 当前实现保存的静态身份信息前缀 |
 
 Notes:
 
 - Offset is byte offset from the beginning of that raw page, not from the ACTL file.
-- Length is byte length of the whole field. Array fields are stored contiguously.
-- For array element `i`, element offset is `field_offset + i * scalar_size`.
-- The raw bytes are not clamped, normalized, converted, or otherwise computed.
-- `is_valid_lap` was verified against the recorded session and is at graphics offset `1404` (previously misreported as `1408` due to missing `penalty` field at offset `1228`).
-- The `penalty` field (AC_PENALTY_TYPE) at offset `1228` was previously missing from the struct, causing a 4-byte offset shift for all subsequent fields. This has been corrected.
-- The `_observed_slot_before_i_split` at offset `1400` was the correct `i_split` position shifted by the missing `penalty` field.
+- Offset values are verified against the actual `SPageFileGraphicsRaw` struct compiled with `repr(C)` and `pack=4`.
+- `is_valid_lap` is at graphics offset `1408`.
+- The `penalty` field (AC_PENALTY_TYPE) at offset `1228` was previously missing from the struct. The old code's `penalty_type` at 1224 was actually the `flag` field. This caused a 4-byte offset shift for all subsequent struct fields. The ACC memory layout itself is unchanged; only the struct field mapping is corrected.
 
 ## Physics Page: `rawPhysicsPage`
 
 | Field | Type | Count | Offset | Length | 中文含义 | English meaning |
-|---|---|---:|---:|---:|---|---|
+|---|---|---|---:|---:|---:|---|---|
 | `packet_id` | `i32` | 1 | 0 | 4 | 物理页数据包序号，用于检测新帧 | Physics packet sequence id for detecting new frames |
 | `gas` | `f32` | 1 | 4 | 4 | 油门踏板原始比例 | Raw throttle pedal ratio |
 | `brake` | `f32` | 1 | 8 | 4 | 刹车踏板原始比例 | Raw brake pedal ratio |
@@ -119,7 +117,7 @@ Notes:
 ## Graphics Page: `rawGraphicsPage`
 
 | Field | Type | Count | Offset | Length | 中文含义 | English meaning |
-|---|---|---:|---:|---:|---|---|
+|---|---|---|---:|---:|---:|---|---|
 | `packet_id` | `i32` | 1 | 0 | 4 | 图形页数据包序号 | Graphics packet sequence id |
 | `status` | `i32` | 1 | 4 | 4 | 游戏状态 | Game status |
 | `session` | `i32` | 1 | 8 | 4 | Session 类型 | Session type |
@@ -139,7 +137,6 @@ Notes:
 | `last_sector_time` | `i32` | 1 | 168 | 4 | 上一分段时间 | Last sector time |
 | `number_of_laps` | `i32` | 1 | 172 | 4 | Session 圈数 | Number of laps |
 | `tyre_compound` | `u16` | 33 | 176 | 66 | 轮胎配方字符串 | Tyre compound string |
-| `_padding_after_tyre_compound` | `u8` | 2 | 242 | 2 | C 结构体对齐填充 | C layout alignment padding |
 | `replay_time_multiplier` | `f32` | 1 | 244 | 4 | 回放时间倍率 | Replay time multiplier |
 | `normalized_car_position` | `f32` | 1 | 248 | 4 | 归一化赛道位置 | Normalized car track position |
 | `active_cars` | `i32` | 1 | 252 | 4 | 活跃车辆数量 | Active car count |
@@ -147,44 +144,41 @@ Notes:
 | `car_id` | `i32` | 60 | 976 | 240 | 最多 60 台车 ID | IDs for up to 60 cars |
 | `player_car_id` | `i32` | 1 | 1216 | 4 | 玩家车辆 ID | Player car id |
 | `penalty_time` | `f32` | 1 | 1220 | 4 | 罚时 | Penalty time |
-| `penalty_type` | `i32` | 1 | 1224 | 4 | 旗语类型（蓝/黄/黑/白/方格/处罚旗） | Flag type (blue/yellow/black/white/chequered/penalty) |
-| `penalty` | `i32` | 1 | 1228 | 4 | 处罚类型（DSQ等）；之前遗漏导致后续偏移-4B | Penalty type; was missing, caused 4B offset shift |
+| `flag` | `i32` | 1 | 1224 | 4 | 旗语类型（蓝/黄/黑/白/方格/处罚） | Flag type (blue/yellow/black/white/chequered/penalty) |
+| `penalty` | `i32` | 1 | 1228 | 4 | 处罚类型（DSQ等）；之前遗漏导致后续偏移-4 | Penalty type; was missing, caused 4-byte offset shift |
 | `ideal_line_on` | `i32` | 1 | 1232 | 4 | 理想线是否开启 | Ideal line enabled state |
 | `is_in_pit_lane` | `i32` | 1 | 1236 | 4 | 是否在维修通道 | In pit lane state |
 | `surface_grip` | `f32` | 1 | 1240 | 4 | 路面抓地力 | Surface grip |
-| `mandatory_pit_done` | `i32` | 1 | 1240 | 4 | 强制进站是否完成 | Mandatory pit completed state |
-| `wind_speed` | `f32` | 1 | 1244 | 4 | 风速 | Wind speed |
-| `wind_direction` | `f32` | 1 | 1248 | 4 | 风向 | Wind direction |
-| `is_setup_menu_visible` | `i32` | 1 | 1252 | 4 | 设置菜单是否可见 | Setup menu visible state |
-| `main_display_index` | `i32` | 1 | 1256 | 4 | 主显示页面索引 | Main display index |
-| `secondary_display_index` | `i32` | 1 | 1260 | 4 | 副显示页面索引 | Secondary display index |
-| `tc` | `i32` | 1 | 1264 | 4 | TC 等级 | Traction control level |
-| `tc_cut` | `i32` | 1 | 1268 | 4 | TC Cut 等级 | Traction control cut level |
-| `engine_map` | `i32` | 1 | 1272 | 4 | 引擎 Map | Engine map |
-| `abs` | `i32` | 1 | 1276 | 4 | ABS 等级 | ABS level |
-| `fuel_x_lap` | `f32` | 1 | 1280 | 4 | 每圈燃油估算 | Fuel per lap estimate |
-| `rain_lights` | `i32` | 1 | 1284 | 4 | 雨灯状态 | Rain lights state |
-| `flashing_lights` | `i32` | 1 | 1288 | 4 | 闪灯状态 | Flashing lights state |
-| `lights_stage` | `i32` | 1 | 1292 | 4 | 车灯档位 | Lights stage |
-| `exhaust_temperature` | `f32` | 1 | 1296 | 4 | 排气温度 | Exhaust temperature |
-| `wiper_lv` | `i32` | 1 | 1300 | 4 | 雨刷档位 | Wiper level |
-| `driver_stint_total_time_left` | `i32` | 1 | 1304 | 4 | 驾驶 stint 总剩余时间 | Driver stint total time left |
-| `driver_stint_time_left` | `i32` | 1 | 1308 | 4 | 驾驶 stint 剩余时间 | Driver stint time left |
-| `rain_tyres` | `i32` | 1 | 1312 | 4 | 是否使用雨胎 | Rain tyres state |
-| `session_index` | `i32` | 1 | 1316 | 4 | Session 索引 | Session index |
-| `used_fuel` | `f32` | 1 | 1320 | 4 | 已用燃油 | Used fuel |
-| `delta_lap_time` | `u16` | 15 | 1324 | 30 | 圈速差字符串 | Delta lap time string |
-| `_padding_after_delta_lap_time` | `u8` | 2 | 1354 | 2 | C 结构体对齐填充 | C layout alignment padding |
-| `i_delta_lap_time` | `i32` | 1 | 1356 | 4 | 圈速差毫秒 | Delta lap time in milliseconds |
-| `estimated_lap_time` | `u16` | 15 | 1360 | 30 | 预计圈速字符串 | Estimated lap time string |
-| `_padding_after_estimated_lap_time` | `u8` | 2 | 1390 | 2 | C 结构体对齐填充 | C layout alignment padding |
-| `i_estimated_lap_time` | `i32` | 1 | 1392 | 4 | 预计圈速毫秒 | Estimated lap time in milliseconds |
-| `is_delta_positive` | `i32` | 1 | 1396 | 4 | 圈速差是否为正 | Delta positive state |
-| `i_split` | `i32` | 1 | 1400 | 4 | 分段时间毫秒（之前被误标为 `_observed_slot_before_i_split`，实为 penalty 缺失导致错位） | Split time in milliseconds; previously mislabeled as `_observed_slot_before_i_split` due to missing penalty field |
-| `is_valid_lap` | `i32` | 1 | 1404 | 4 | 当前圈是否有效；过线前一帧代表刚结束圈的有效性 | Current lap valid state; value before lap reset describes the lap that just ended |
-| `fuel_estimated_laps` | `f32` | 1 | 1408 | 4 | 燃油预计可跑圈数 | Estimated laps possible with current fuel level |
-| `track_status` | `u16` | 33 | 1412 | 66 | 赛道状态字符串 | Track status string |
-| `_padding_after_track_status` | `u8` | 2 | 1478 | 2 | C 结构体对齐填充 | C layout alignment padding |
+| `mandatory_pit_done` | `i32` | 1 | 1244 | 4 | 强制进站是否完成 | Mandatory pit completed state |
+| `wind_speed` | `f32` | 1 | 1248 | 4 | 风速 | Wind speed |
+| `wind_direction` | `f32` | 1 | 1252 | 4 | 风向 | Wind direction |
+| `is_setup_menu_visible` | `i32` | 1 | 1256 | 4 | 设置菜单是否可见 | Setup menu visible state |
+| `main_display_index` | `i32` | 1 | 1260 | 4 | 主显示页面索引 | Main display index |
+| `secondary_display_index` | `i32` | 1 | 1264 | 4 | 副显示页面索引 | Secondary display index |
+| `tc` | `i32` | 1 | 1268 | 4 | TC 等级 | Traction control level |
+| `tc_cut` | `i32` | 1 | 1272 | 4 | TC Cut 等级 | Traction control cut level |
+| `engine_map` | `i32` | 1 | 1276 | 4 | 引擎 Map | Engine map |
+| `abs` | `i32` | 1 | 1280 | 4 | ABS 等级 | ABS level |
+| `fuel_x_lap` | `f32` | 1 | 1284 | 4 | 每圈燃油估算 | Fuel per lap estimate |
+| `rain_lights` | `i32` | 1 | 1288 | 4 | 雨灯状态 | Rain lights state |
+| `flashing_lights` | `i32` | 1 | 1292 | 4 | 闪灯状态 | Flashing lights state |
+| `lights_stage` | `i32` | 1 | 1296 | 4 | 车灯档位 | Lights stage |
+| `exhaust_temperature` | `f32` | 1 | 1300 | 4 | 排气温度 | Exhaust temperature |
+| `wiper_lv` | `i32` | 1 | 1304 | 4 | 雨刷档位 | Wiper level |
+| `driver_stint_total_time_left` | `i32` | 1 | 1308 | 4 | 驾驶 stint 总剩余时间 | Driver stint total time left |
+| `driver_stint_time_left` | `i32` | 1 | 1312 | 4 | 驾驶 stint 剩余时间 | Driver stint time left |
+| `rain_tyres` | `i32` | 1 | 1316 | 4 | 是否使用雨胎 | Rain tyres state |
+| `session_index` | `i32` | 1 | 1320 | 4 | Session 索引 | Session index |
+| `used_fuel` | `f32` | 1 | 1324 | 4 | 已用燃油 | Used fuel |
+| `delta_lap_time` | `u16` | 15 | 1328 | 30 | 圈速差字符串 | Delta lap time string |
+| `i_delta_lap_time` | `i32` | 1 | 1360 | 4 | 圈速差毫秒 | Delta lap time in milliseconds |
+| `estimated_lap_time` | `u16` | 15 | 1364 | 30 | 预计圈速字符串 | Estimated lap time string |
+| `i_estimated_lap_time` | `i32` | 1 | 1396 | 4 | 预计圈速毫秒 | Estimated lap time in milliseconds |
+| `is_delta_positive` | `i32` | 1 | 1400 | 4 | 圈速差是否为正 | Delta positive state |
+| `i_split` | `i32` | 1 | 1404 | 4 | 分段时间毫秒 | Split time in milliseconds |
+| `is_valid_lap` | `i32` | 1 | 1408 | 4 | 当前圈是否有效；过线前一帧代表刚结束圈的有效性 | Current lap valid state; value before lap reset describes the lap that just ended |
+| `fuel_estimated_laps` | `f32` | 1 | 1412 | 4 | 燃油预计可跑圈数 | Estimated laps possible with current fuel level |
+| `track_status` | `u16` | 33 | 1416 | 66 | 赛道状态字符串 | Track status string |
 | `missing_mandatory_pits` | `i32` | 1 | 1484 | 4 | 剩余强制进站次数 | Missing mandatory pit stops |
 | `clock` | `f32` | 1 | 1488 | 4 | 游戏时钟 | Game clock |
 | `direction_lights_left` | `i32` | 1 | 1492 | 4 | 左转向灯状态 | Left indicator state |
@@ -209,17 +203,57 @@ Notes:
 | `rain_intensity_in_30min` | `i32` | 1 | 1568 | 4 | 30 分钟后雨量 | Rain intensity in 30 minutes |
 | `current_tyre_set` | `i32` | 1 | 1572 | 4 | 当前轮胎套装 | Current tyre set |
 | `strategy_tyre_set` | `i32` | 1 | 1576 | 4 | 策略轮胎套装 | Strategy tyre set |
-| `gap_ahead_or_tail_value` | `i32` | 1 | 1580 | 4 | 图形页尾部差距/尾字段；当前 1584 字节捕获的最后 4 字节 | Tail gap/value field; last 4 bytes captured in the current 1584-byte page |
+| `gap_ahead` | `i32` | 1 | 1580 | 4 | 前车差距 | Gap to car ahead |
+| `gap_behind` | `i32` | 1 | 1584 | 4 | 后车差距 | Gap to car behind |
 
 ## Static Page: `rawStaticPage`
 
 The current implementation captures the static identity prefix used for file metadata and later decoding context.
 
 | Field | Type | Count | Offset | Length | 中文含义 | English meaning |
-|---|---|---:|---:|---:|---|---|
+|---|---|---|---:|---:|---:|---|---|
 | `sm_version` | `u16` | 15 | 0 | 30 | 共享内存版本字符串 | Shared memory version string |
 | `ac_version` | `u16` | 15 | 30 | 30 | Assetto Corsa/ACC 版本字符串 | Assetto Corsa/ACC version string |
 | `number_of_sessions` | `i32` | 1 | 60 | 4 | Session 数量 | Number of sessions |
 | `num_cars` | `i32` | 1 | 64 | 4 | 车辆数量 | Number of cars |
 | `car_model` | `u16` | 33 | 68 | 66 | 车辆型号字符串 | Car model string |
 | `track` | `u16` | 33 | 134 | 66 | 赛道名称字符串 | Track name string |
+| `player_name` | `u16` | 33 | 200 | 66 | 玩家名 | Player name |
+| `player_surname` | `u16` | 33 | 266 | 66 | 玩家姓 | Player surname |
+| `player_nick` | `u16` | 33 | 332 | 66 | 玩家昵称 | Player nickname |
+| `sector_count` | `i32` | 1 | 398 | 4 | 赛道分段数 | Number of sectors |
+| `max_torque` | `f32` | 1 | 402 | 4 | 最大扭矩 | Maximum torque |
+| `max_power` | `f32` | 1 | 406 | 4 | 最大功率 | Maximum power |
+| `max_rpm` | `i32` | 1 | 410 | 4 | 最大转速 | Maximum RPM |
+| `max_fuel` | `f32` | 1 | 414 | 4 | 最大燃油量 | Maximum fuel |
+| `suspension_max_travel` | `f32` | 4 | 418 | 16 | 悬挂最大行程 | Maximum suspension travel |
+| `tyre_radius` | `f32` | 4 | 434 | 16 | 轮胎半径 | Tyre radius |
+| `max_turbo_boost` | `f32` | 1 | 450 | 4 | 最大涡轮增压 | Maximum turbo boost |
+| `deprecated_1` | `f32` | 1 | 454 | 4 | 废弃字段 | Deprecated field |
+| `deprecated_2` | `f32` | 1 | 458 | 4 | 废弃字段 | Deprecated field |
+| `penalties_enabled` | `i32` | 1 | 462 | 4 | 处罚是否启用 | Penalties enabled |
+| `aid_fuel_rate` | `f32` | 1 | 466 | 4 | 燃油消耗辅助 | Fuel rate aid |
+| `aid_tire_rate` | `f32` | 1 | 470 | 4 | 轮胎磨损辅助 | Tyre rate aid |
+| `aid_mechanical_damage` | `f32` | 1 | 474 | 4 | 机械损伤辅助 | Mechanical damage aid |
+| `aid_allow_tyre_blankets` | `i32` | 1 | 478 | 4 | 轮胎毯辅助 | Tyre blankets aid |
+| `aid_stability` | `f32` | 1 | 482 | 4 | 稳定性辅助 | Stability aid |
+| `aid_auto_clutch` | `i32` | 1 | 486 | 4 | 自动离合器 | Auto clutch |
+| `aid_auto_blip` | `i32` | 1 | 490 | 4 | 自动补油 | Auto blip |
+| `has_drs` | `i32` | 1 | 494 | 4 | 是否有 DRS | Has DRS |
+| `has_ers` | `i32` | 1 | 498 | 4 | 是否有 ERS | Has ERS |
+| `has_kers` | `i32` | 1 | 502 | 4 | 是否有 KERS | Has KERS |
+| `kers_max_j` | `f32` | 1 | 506 | 4 | KERS 最大能量 J | KERS max energy J |
+| `engine_brake_settings_count` | `i32` | 1 | 510 | 4 | 发动机制动设置数 | Engine brake settings count |
+| `ers_power_controller_count` | `i32` | 1 | 514 | 4 | ERS 功率控制数 | ERS power controller count |
+| `track_spline_length` | `f32` | 1 | 518 | 4 | 赛道样条长度 | Track spline length |
+| `track_configuration` | `u16` | 33 | 522 | 66 | 赛道配置字符串 | Track configuration |
+| `ers_max_j` | `f32` | 1 | 588 | 4 | ERS 最大能量 | ERS max joule |
+| `is_timed_race` | `i32` | 1 | 592 | 4 | 是否限时赛 | Is timed race |
+| `has_extra_lap` | `i32` | 1 | 596 | 4 | 是否有额外圈 | Has extra lap |
+| `car_skin` | `u16` | 33 | 600 | 66 | 车辆皮肤 | Car skin |
+| `reversed_grid_positions` | `i32` | 1 | 666 | 4 | 逆序发车位 | Reversed grid positions |
+| `pit_window_start` | `i32` | 1 | 670 | 4 | 进站窗口开始 | Pit window start |
+| `pit_window_end` | `i32` | 1 | 674 | 4 | 进站窗口结束 | Pit window end |
+| `is_online` | `i32` | 1 | 678 | 4 | 是否在线 | Is online |
+| `dry_tyres_name` | `u16` | 33 | 682 | 66 | 干胎名称 | Dry tyres name |
+| `wet_tyres_name` | `u16` | 33 | 748 | 66 | 雨胎名称 | Wet tyres name |

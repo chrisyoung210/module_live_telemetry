@@ -155,8 +155,20 @@ pub(crate) fn encode_metadata(metadata: &SessionMetadata) -> Vec<u8> {
     out.extend_from_slice(&(sm.len() as u16).to_le_bytes());
     out.extend_from_slice(&(ac.len() as u16).to_le_bytes());
     out.extend_from_slice(&metadata.number_of_sessions.to_le_bytes());
-    out.extend_from_slice(&metadata.num_cars.to_le_bytes());
+out.extend_from_slice(&metadata.num_cars.to_le_bytes());
     out.extend_from_slice(sm); out.extend_from_slice(ac);
+    // v3 extended static fields (after v2 for backward compat)
+    out.extend_from_slice(&metadata.sector_count.to_le_bytes());
+    out.extend_from_slice(&metadata.max_rpm.to_le_bytes());
+    out.extend_from_slice(&metadata.max_torque.to_le_bytes());
+    out.extend_from_slice(&metadata.max_power.to_le_bytes());
+    out.extend_from_slice(&metadata.max_fuel.to_le_bytes());
+    out.extend_from_slice(&metadata.penalties_enabled.to_le_bytes());
+    // v4: raw static page bytes (backward compat: empty vec → skip)
+    if !metadata.raw_static_bytes.is_empty() {
+        out.extend_from_slice(&(metadata.raw_static_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&metadata.raw_static_bytes);
+    }
     out
 }
 
@@ -321,8 +333,10 @@ fn encode_session_chunk(frames: &[TelemetryFrame], n: usize) -> EncodeResult {
     for f in frames { p.extend_from_slice(&f.session.global_green.to_le_bytes()); }
     for f in frames { p.extend_from_slice(&f.session.global_chequered.to_le_bytes()); }
     for f in frames { p.extend_from_slice(&f.session.global_red.to_le_bytes()); }
-    for f in frames { p.extend_from_slice(&f.session.gap_ahead_or_tail_value.to_le_bytes()); }
-    let sizes: [usize;30] = [8,8,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,66,4,4,4,4,4,4,4,4,4,4,4,4];
+for f in frames { p.extend_from_slice(&f.session.gap_ahead_or_tail_value.to_le_bytes()); }
+    for f in frames { p.extend_from_slice(&f.session.flag.to_le_bytes()); }
+    for f in frames { p.extend_from_slice(&f.session.gap_behind.to_le_bytes()); }
+    let sizes: [usize;32] = [8,8,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,66,4,4,4,4,4,4,4,4,4,4,4,4,4,4];
     EncodeResult { entries: build_entries(&SESSION_COLUMNS, n, &sizes), payload: p, first_tick: ft, last_tick: lt, first_time: fn_, last_time: ln_, sample_count: n as u32 }
 }
 

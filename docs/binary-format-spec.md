@@ -24,8 +24,12 @@
 ├──────────────────────────┤ footer_offset (如果写入)
 │     Index Block          │ 变长
 │     Footer               │ 24 bytes (固定)
+├──────────────────────────┤ (optional)
+│     Lap Index Block      │ 变长 (LAPS magic + entries)
 └──────────────────────────┘ EOF
 ```
+
+> 注意：Lap Index Block 在 Footer 之后，是可选的。旧文件没有此块，读取时自动跳过。
 
 ---
 
@@ -49,7 +53,7 @@
 ### 读取步骤
 
 1. 读取 8 bytes 魔数，验证等于 `"ACTL\r\n\x1A\n"`
-2. 读取 `version`，必须为 `2`
+2. 读取 `version`，当前写入为 `2`，读取兼容 `1` 和 `2`
 3. 读取 `header_size`，必须为 `128`
 4. 依次读取其余字段
 5. 根据 `schema_offset` → `metadata_offset` → `first_chunk_offset` → `footer_offset` 定位各段
@@ -118,7 +122,11 @@ Session 元数据，紧跟 Schema Block 之后。
 | — | `sm_version_len` | `[u8]` | sm_version | 服务管理器版本 |
 | — | `ac_version_len` | `[u8]` | ac_version | ACC 版本 |
 
-> **注意**: `sm_version`/`ac_version`/`number_of_sessions`/`num_cars` 为扩展字段。若剩余字节不足 12 字节，解析时填入默认值（空字符串 / 0）。
+> ***v2 扩展**: `sm_version`/`ac_version`/`number_of_sessions`/`num_cars` 为扩展字段。若剩余字节不足 12 字节，解析时填入默认值（空字符串 / 0）。
+>
+> ***v3 扩展**（ac_version 之后，24 字节）: `sector_count`(i32) + `max_rpm`(i32) + `max_torque`(f32) + `max_power`(f32) + `max_fuel`(f32) + `penalties_enabled`(i32)。若剩余字节不足 24，填入默认值 0。
+>
+> ***v4 扩展**（v3 之后）: `raw_static_len`(u32) + `raw_static_bytes`。包含 ACC 完整静态页（SPageFileStatic，47 字段 684 字节）的原始字节。若剩余字节不足 4，跳过。
 
 ---
 
@@ -219,11 +227,32 @@ Payload = [Column_0 data][Column_1 data]...[Column_N data]
 | 12 | 8 | `u64` | total_samples | 总采样数 |
 | 20 | 4 | `u32` | chunk_count | Chunk 总数 |
 
+### Lap Index Block（可选，Footer 之后）
+
+用于快速随机访问任意一圈的帧范围。由 `record` 命令自动生成，也可用 `build-lap-index` 手动追加。
+
+| 偏移 | 长度 | 类型 | 字段 | 说明 |
+|------|------|------|------|------|
+| 0 | 4 | `[u8; 4]` | magic | `"LAPS"` |
+| 4 | 4 | `u32` | lap_count | 圈数 |
+| 8 | 32×N | `LapIndexEntry[N]` | entries | 圈索引条目 |
+
+**LapIndexEntry (32 bytes)**：
+
+| 偏移 | 长度 | 类型 | 字段 | 说明 |
+|------|------|------|------|------|
+| 0 | 4 | `i32` | lap_number | 圈号（0=out lap） |
+| 4 | 8 | `u64` | start_tick | 起始 tick |
+| 12 | 8 | `u64` | end_tick | 结束 tick |
+| 20 | 4 | `u32` | sample_count | 采样点数 |
+| 24 | 4 | `i32` | is_valid | 圈是否有效（0/1） |
+| 28 | 4 | `i32` | is_out_lap | 是否 out lap（0/1） |
+
 ---
 
 ## 7. Schema 定义的列簇与列
 
-当前 Schema Hash `0x4143544C00000002` 包含以下 9 个列簇：
+当前 Schema Hash `0x4143544C00000002` 包含以下 9 个列簇（v2，含 `flag`/`gapBehind` 新增列）：
 
 ### 7.1 Controls (0x0100) — 驾驶控制
 
@@ -359,6 +388,8 @@ Payload = [Column_0 data][Column_1 data]...[Column_N data]
 | 115 | globalChequered | i32 | 全局方格旗 |
 | 116 | globalRed | i32 | 全局红旗 |
 | 117 | gapAheadOrTailValue | i32 | 与前车间距 |
+| 118 | flag | i32 | 旗语类型（蓝/黄/黑/白/方格/处罚） |
+| 119 | gapBehind | i32 | 与后车间距 |
 
 ### 7.6 Timing (0x0600) — 计时数据
 

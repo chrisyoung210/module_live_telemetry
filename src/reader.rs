@@ -1,10 +1,10 @@
 use crate::error::{TelemetryError, TelemetryResult};
 use crate::format::{
     crc32, read_i32, read_u16, read_u32, read_u64, validate_schema, x1000_to_hz, ChunkHeader,
-    ColumnEntry, FileHeader, IndexEntry, CHUNK_MAGIC, CLUSTER_SESSION, CLUSTER_TIMING,
+    ColumnEntry, FileHeader, IndexEntry, LAP_INDEX_MAGIC, CHUNK_MAGIC, CLUSTER_SESSION, CLUSTER_TIMING,
     COL_BRAKE, COL_CLUTCH, COL_COMPLETED_LAPS, COL_CLOCK, COL_CURRENT_SECTOR_INDEX,
     COL_CURRENT_TIME_STR, COL_DISTANCE_TRAVELED, COL_FUEL, COL_FUEL_ESTIMATED_LAPS, COL_FUEL_X_LAP,
-    COL_GAS, COL_GEAR, COL_GAP_AHEAD_OR_TAIL, COL_GLOBAL_CHEQUERED, COL_GLOBAL_GREEN,
+    COL_GAS, COL_GEAR, COL_GAP_AHEAD_OR_TAIL, COL_GAP_BEHIND, COL_FLAG, COL_GLOBAL_CHEQUERED, COL_GLOBAL_GREEN,
     COL_GLOBAL_RED, COL_GLOBAL_WHITE, COL_GLOBAL_YELLOW, COL_GLOBAL_YELLOW1, COL_GLOBAL_YELLOW2,
     COL_GLOBAL_YELLOW3, COL_I_BEST_TIME, COL_I_CURRENT_TIME, COL_I_DELTA_LAP_TIME,
     COL_I_ESTIMATED_LAP_TIME, COL_I_LAST_TIME, COL_I_SPLIT, COL_IS_DELTA_POSITIVE,
@@ -19,7 +19,7 @@ use crate::format::{
     COL_DELTA_LAP_TIME_STR, COL_BEST_TIME_STR,
 };
 use crate::types::{
-    ControlSample, RecordingSummary, SessionMetadata, SessionSample, TimingSample,
+    ControlSample, RecordingSummary, SessionMetadata, SessionSample, TimingSample, LapIndexEntry,
     CLUSTER_CONTROLS,
 };
 use std::fs::File;
@@ -31,6 +31,7 @@ pub struct BinaryTelemetryReader {
     header: FileHeader,
     metadata: SessionMetadata,
     index_entries: Vec<IndexEntry>,
+    lap_entries: Vec<LapIndexEntry>,
     summary: RecordingSummary,
 }
 
@@ -80,12 +81,12 @@ impl BinaryTelemetryReader {
             footer_offset,
         };
 
+        // Try to read lap index after footer
+        let lap_entries = read_lap_index_if_present(&bytes, footer_offset + 24);
+
         Ok(Self {
-            bytes,
-            header,
-            metadata,
-            index_entries,
-            summary,
+            bytes, header, metadata,
+            index_entries, lap_entries, summary,
         })
     }
 
@@ -103,6 +104,10 @@ impl BinaryTelemetryReader {
 
     pub fn chunk_index(&self) -> &[IndexEntry] {
         &self.index_entries
+    }
+
+    pub fn lap_index(&self) -> &[LapIndexEntry] {
+        &self.lap_entries
     }
 
     pub fn read_all_controls(&self) -> TelemetryResult<Vec<ControlSample>> {
@@ -236,17 +241,49 @@ fn decode_metadata(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
             (String::from_utf8_lossy(&sm).into_owned(),
              String::from_utf8_lossy(&ac).into_owned(), ns, nc)
         } else {
-            (String::new(), String::new(), 0, 0)
+(String::new(), String::new(), 0, 0)
         };
+
+    // v3 extended static fields (scalar, backwards compatible)
+    let (sector_count, max_rpm, max_torque, max_power, max_fuel, penalties_enabled) = {
+        let remaining2 = bytes.len().saturating_sub(cursor.position() as usize);
+        if remaining2 >= 24 {
+            let sc = read_i32(&mut cursor).unwrap_or(0);
+            let mr = read_i32(&mut cursor).unwrap_or(0);
+            let mt = f32::from_le_bytes({
+                let mut b = [0u8;4]; let _ = cursor.read_exact(&mut b); b
+            });
+            let mp = f32::from_le_bytes({
+                let mut b = [0u8;4]; let _ = cursor.read_exact(&mut b); b
+            });
+            let mf = f32::from_le_bytes({
+                let mut b = [0u8;4]; let _ = cursor.read_exact(&mut b); b
+            });
+            let pe = read_i32(&mut cursor).unwrap_or(0);
+            (sc, mr, mt, mp, mf, pe)
+        } else {
+            (0, 0, 0.0, 0.0, 0.0, 0)
+        }
+    };
 
     Ok(SessionMetadata {
         track_name: String::from_utf8_lossy(&track).into_owned(),
         car_model: String::from_utf8_lossy(&car).into_owned(),
         created_unix_ns, poll_hz, chunk_rows,
-        sm_version,
-        ac_version,
-        number_of_sessions,
-        num_cars,
+        sm_version, ac_version, number_of_sessions, num_cars,
+        sector_count, max_rpm, max_torque, max_power, max_fuel, penalties_enabled,
+        // v4: raw static page bytes (backward compat)
+        raw_static_bytes: {
+            let remaining3 = bytes.len().saturating_sub(cursor.position() as usize);
+            if remaining3 >= 4 {
+                let raw_len = read_u32(&mut cursor).unwrap_or(0) as usize;
+                if raw_len > 0 && raw_len <= remaining3.saturating_sub(4) {
+                    let mut raw = vec![0u8; raw_len];
+                    let _ = cursor.read_exact(&mut raw);
+                    raw
+                } else { Vec::new() }
+            } else { Vec::new() }
+        },
     })
 }
 
@@ -391,6 +428,8 @@ fn decode_session_payload(
     let global_chequered = read_i32_column(payload, columns, COL_GLOBAL_CHEQUERED, count)?;
     let global_red = read_i32_column(payload, columns, COL_GLOBAL_RED, count)?;
     let gap_ahead_or_tail_value = read_i32_column(payload, columns, COL_GAP_AHEAD_OR_TAIL, count)?;
+    let flag = read_i32_column_opt(payload, columns, COL_FLAG, count);
+    let gap_behind = read_i32_column_opt(payload, columns, COL_GAP_BEHIND, count);
 
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
@@ -424,8 +463,10 @@ fn decode_session_payload(
             global_green: global_green[i],
             global_chequered: global_chequered[i],
             global_red: global_red[i],
-            gap_ahead_or_tail_value: gap_ahead_or_tail_value[i],
-        });
+gap_ahead_or_tail_value: gap_ahead_or_tail_value[i],
+                flag: flag.as_ref().map(|v| v[i]).unwrap_or(0),
+                gap_behind: gap_behind.as_ref().map(|v| v[i]).unwrap_or(0),
+            });
     }
     Ok(out)
 }
@@ -589,4 +630,31 @@ fn column_bytes<'a>(
         )));
     }
     Ok(&payload[start..end])
+}
+
+fn read_lap_index_if_present(bytes: &[u8], start: u64) -> Vec<LapIndexEntry> {
+    let pos = start as usize;
+    if pos + 8 > bytes.len() { return Vec::new(); }
+    let mut magic = [0u8; 4];
+    magic.copy_from_slice(&bytes[pos..pos+4]);
+    if magic != LAP_INDEX_MAGIC { return Vec::new(); }
+    let count = u32::from_le_bytes(bytes[pos+4..pos+8].try_into().unwrap()) as usize;
+    if count > 1000 { return Vec::new(); } // sanity check
+    let entry_size = 4 + 8 + 8 + 4 + 4 + 4; // 32 bytes
+    let end = pos + 8 + count * entry_size;
+    if end > bytes.len() { return Vec::new(); }
+    let mut entries = Vec::with_capacity(count);
+    let mut off = pos + 8;
+    for _ in 0..count {
+        entries.push(LapIndexEntry {
+            lap_number: i32::from_le_bytes(bytes[off..off+4].try_into().unwrap()),
+            start_tick: u64::from_le_bytes(bytes[off+4..off+12].try_into().unwrap()),
+            end_tick: u64::from_le_bytes(bytes[off+12..off+20].try_into().unwrap()),
+            sample_count: u32::from_le_bytes(bytes[off+20..off+24].try_into().unwrap()),
+            is_valid: i32::from_le_bytes(bytes[off+24..off+28].try_into().unwrap()),
+            is_out_lap: i32::from_le_bytes(bytes[off+28..off+32].try_into().unwrap()),
+        });
+        off += entry_size;
+    }
+    entries
 }
