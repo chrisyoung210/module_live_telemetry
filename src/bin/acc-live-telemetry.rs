@@ -709,6 +709,18 @@ fn parse_raw_command(args: &[String]) -> TelemetryResult<()> {
     file.read_exact(&mut sz_buf)?; let stat_sz = u32::from_le_bytes(sz_buf) as usize;
     let use_hz = if poll_hz > 0.0 { poll_hz } else { file_poll_hz };
 
+    // Validate page sizes: guard against corrupt / malicious headers
+    const MAX_RAW_PAGE_SIZE: usize = 65536; // 64KB generous upper bound
+    if phys_sz == 0 || phys_sz > MAX_RAW_PAGE_SIZE {
+        return Err(TelemetryError::InvalidFormat(format!("invalid physics page size: {phys_sz}")));
+    }
+    if graph_sz == 0 || graph_sz > MAX_RAW_PAGE_SIZE {
+        return Err(TelemetryError::InvalidFormat(format!("invalid graphics page size: {graph_sz}")));
+    }
+    if !(200..=MAX_RAW_PAGE_SIZE).contains(&stat_sz) {
+        return Err(TelemetryError::InvalidFormat(format!("invalid static page size: {stat_sz}")));
+    }
+
     let mut stat_bytes = vec![0u8; stat_sz];
     file.read_exact(&mut stat_bytes)?;
     let car = String::from_utf16_lossy(&stat_bytes[68..134].chunks_exact(2).map(|b| u16::from_le_bytes([b[0],b[1]])).collect::<Vec<u16>>()).trim_end_matches('\0').to_string();
@@ -716,7 +728,10 @@ fn parse_raw_command(args: &[String]) -> TelemetryResult<()> {
     let track = if track.is_empty() { "unknown".into() } else { track };
     let car = if car.is_empty() { "unknown_car".into() } else { car };
 
-    let frame_size = 8 + 8 + phys_sz + graph_sz;
+    let frame_size = 16usize
+        .checked_add(phys_sz)
+        .and_then(|v| v.checked_add(graph_sz))
+        .ok_or_else(|| TelemetryError::InvalidFormat("frame size overflow".into()))?;
     let mut metadata = SessionMetadata::new(&track, &car, use_hz);
     // Store full raw static page for later parsing
     metadata.raw_static_bytes = stat_bytes.clone();
@@ -926,7 +941,7 @@ fn export_lap_field_command(args: &[String]) -> TelemetryResult<()> {
                 crossings.push(i);
             }
         }
-        if lap_num >= crossings.len() + 1 { return Err(TelemetryError::InvalidArgument(format!("lap {} not found", lap_num))); }
+        if lap_num > crossings.len() { return Err(TelemetryError::InvalidArgument(format!("lap {} not found", lap_num))); }
         let start_idx = if lap_num == 0 { 0 } else { crossings[lap_num - 1] };
         let end_idx = if lap_num < crossings.len() { crossings[lap_num] - 1 } else { session.len() - 1 };
         (session[start_idx].sample_tick, session[end_idx].sample_tick)

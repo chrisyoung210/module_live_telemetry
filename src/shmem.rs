@@ -805,7 +805,7 @@ impl WindowsSharedMemory {
     }
 
     fn read_raw_bytes(&self) -> TelemetryResult<Vec<u8>> {
-        if self.view.is_null() { return Err(TelemetryError::Io(std::io::Error::new(std::io::ErrorKind::Other, "null view"))); }
+        if self.view.is_null() { return Err(TelemetryError::Io(std::io::Error::other("null view"))); }
         let slice = unsafe { std::slice::from_raw_parts(self.view as *const u8, self.mapped_size) };
         Ok(slice.to_vec())
     }
@@ -863,6 +863,7 @@ impl WindowsSharedMemory {
         })
     }
 
+    #[allow(dead_code)]
     fn static_full(&self) -> TelemetryResult<SPageFileStatic> {
         if self.mapped_size < std::mem::size_of::<SPageFileStatic>() {
             return Err(TelemetryError::InvalidFormat(
@@ -937,8 +938,8 @@ pub fn parse_raw_frame(
     if graphics_bytes.len() < graph_size {
         return Err(TelemetryError::InvalidFormat("graphics page too small".into()));
     }
-    let phys: &SPageFilePhysicsControls = unsafe { &*(physics_bytes.as_ptr() as *const SPageFilePhysicsControls) };
-    let gfx: &SPageFileGraphicsRaw = unsafe { &*(graphics_bytes.as_ptr() as *const SPageFileGraphicsRaw) };
+    let phys = unsafe { std::ptr::read_unaligned(physics_bytes.as_ptr() as *const SPageFilePhysicsControls) };
+    let gfx = unsafe { std::ptr::read_unaligned(graphics_bytes.as_ptr() as *const SPageFileGraphicsRaw) };
 
     Ok(TelemetryFrame {
         sample_tick,
@@ -968,9 +969,9 @@ pub fn parse_raw_frame(
             tyre_temp: phys.tyre_temp, mz: phys.mz, fx: phys.fx, fy: phys.fy,
             suspension_damage: phys.suspension_damage, brake_temp: phys.brake_temp,
             brake_pressure: phys.brake_pressure, pad_life: phys.pad_life, disc_life: phys.disc_life,
-            tyre_contact_point: unsafe { std::mem::transmute(phys.tyre_contact_point) },
-            tyre_contact_normal: unsafe { std::mem::transmute(phys.tyre_contact_normal) },
-            tyre_contact_heading: unsafe { std::mem::transmute(phys.tyre_contact_heading) },
+            tyre_contact_point: unsafe { std::mem::transmute::<[[f32; 3]; 4], [f32; 12]>(phys.tyre_contact_point) },
+            tyre_contact_normal: unsafe { std::mem::transmute::<[[f32; 3]; 4], [f32; 12]>(phys.tyre_contact_normal) },
+            tyre_contact_heading: unsafe { std::mem::transmute::<[[f32; 3]; 4], [f32; 12]>(phys.tyre_contact_heading) },
             number_of_tyres_out: phys.number_of_tyres_out,
             front_brake_compound: phys.front_brake_compound,
             rear_brake_compound: phys.rear_brake_compound,

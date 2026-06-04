@@ -262,7 +262,7 @@ fn encode_tyres_chunk(frames: &[TelemetryFrame], n: usize) -> EncodeResult {
     for f in frames { p.extend_from_slice(&f.tyres.number_of_tyres_out.to_le_bytes()); }
     for f in frames { p.extend_from_slice(&f.tyres.front_brake_compound.to_le_bytes()); }
     for f in frames { p.extend_from_slice(&f.tyres.rear_brake_compound.to_le_bytes()); }
-    let sizes: [usize;31] = [8,8, 16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16, 48,48,48, 4,4];
+    let sizes: [usize;31] = [8,8, 16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16, 48,48,48, 4,4,4];
     EncodeResult { entries: build_entries(&TYRES_COLUMNS, n, &sizes), payload: p, first_tick: ft, last_tick: lt, first_time: fn_, last_time: ln_, sample_count: n as u32 }
 }
 

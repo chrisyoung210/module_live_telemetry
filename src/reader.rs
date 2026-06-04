@@ -2,7 +2,8 @@ use crate::error::{TelemetryError, TelemetryResult};
 use crate::format::{
     crc32, read_i32, read_u16, read_u32, read_u64, validate_schema, x1000_to_hz, ChunkHeader,
     ColumnEntry, FileHeader, IndexEntry, LAP_INDEX_MAGIC, CHUNK_MAGIC, CLUSTER_ENVIRONMENT,
-    CLUSTER_SESSION, CLUSTER_TIMING,
+    CLUSTER_SESSION, CLUSTER_TIMING, CLUSTER_CAR_STATE, CLUSTER_MOTION,
+    CLUSTER_OTHER_CARS, CLUSTER_POWERTRAIN, CLUSTER_TYRES,
     COL_AIR_DENSITY, COL_AIR_TEMP, COL_BRAKE, COL_CLUTCH, COL_COMPLETED_LAPS, COL_CLOCK,
     COL_CURRENT_SECTOR_INDEX, COL_CURRENT_TIME_STR, COL_DISTANCE_TRAVELED, COL_FUEL,
     COL_FUEL_ESTIMATED_LAPS, COL_FUEL_X_LAP, COL_GAS, COL_GEAR, COL_GAP_AHEAD_OR_TAIL,
@@ -22,9 +23,40 @@ use crate::format::{
     FOOTER_MAGIC, HEADER_SIZE, INDEX_MAGIC, META_MAGIC, COL_ESTIMATED_LAP_TIME_STR,
     COL_DELTA_LAP_TIME_STR, COL_BEST_TIME_STR,
 };
+
+// Motion, Tyres, Powertrain, CarState, OtherCars column IDs
+use crate::format::{
+    COL_VELOCITY, COL_ACC_G, COL_LOCAL_VELOCITY, COL_LOCAL_ANGULAR_VEL,
+    COL_HEADING, COL_PITCH, COL_ROLL,
+    COL_WHEEL_SLIP, COL_WHEEL_LOAD, COL_WHEELS_PRESSURE, COL_WHEEL_ANGULAR_SPEED,
+    COL_TYRE_WEAR, COL_TYRE_DIRTY_LEVEL, COL_TYRE_CORE_TEMPERATURE, COL_CAMBER_RAD,
+    COL_SUSPENSION_TRAVEL, COL_SLIP_RATIO, COL_SLIP_ANGLE, COL_TYRE_TEMP_I,
+    COL_TYRE_TEMP_M, COL_TYRE_TEMP_O, COL_TYRE_TEMP, COL_MZ, COL_FX, COL_FY,
+    COL_SUSPENSION_DAMAGE, COL_BRAKE_TEMP, COL_BRAKE_PRESSURE, COL_PAD_LIFE, COL_DISC_LIFE,
+    COL_TYRE_CONTACT_POINT, COL_TYRE_CONTACT_NORMAL, COL_TYRE_CONTACT_HEADING,
+    COL_NUMBER_OF_TYRES_OUT, COL_FRONT_BRAKE_COMPOUND, COL_REAR_BRAKE_COMPOUND,
+    COL_TURBO_BOOST, COL_BALLAST, COL_KERS_CHARGE, COL_KERS_INPUT, COL_KERS_CURRENT_KJ,
+    COL_DRS, COL_TC_PHYSICS, COL_ABS_PHYSICS, COL_ENGINE_BRAKE, COL_ERS_RECOVERY_LEVEL,
+    COL_ERS_POWER_LEVEL, COL_ERS_HEAT_CHARGING, COL_ERS_IS_CHARGING, COL_DRS_AVAILABLE,
+    COL_DRS_ENABLED, COL_TC_IN_ACTION, COL_ABS_IN_ACTION, COL_AUTO_SHIFTER_ON,
+    COL_CURRENT_MAX_RPM, COL_P2P_ACTIVATIONS, COL_P2P_STATUS, COL_WATER_TEMP,
+    COL_CAR_DAMAGE, COL_PIT_LIMITER_ON, COL_RIDE_HEIGHT, COL_IGNITION_ON,
+    COL_STARTER_ENGINE_ON, COL_IS_ENGINE_RUNNING, COL_IS_AI_CONTROLLED, COL_CG_HEIGHT,
+    COL_BRAKE_BIAS, COL_RAIN_LIGHTS, COL_FLASHING_LIGHTS, COL_LIGHTS_STAGE, COL_WIPER_LV,
+    COL_DRIVER_STINT_TOTAL_TIME_LEFT, COL_DRIVER_STINT_TIME_LEFT, COL_RAIN_TYRES,
+    COL_CURRENT_TYRE_SET, COL_STRATEGY_TYRE_SET, COL_TRACK_GRIP_STATUS, COL_TYRE_COMPOUND_STR,
+    COL_MFD_TYRE_SET, COL_MFD_FUEL_TO_ADD, COL_MFD_TYRE_PRESSURE, COL_IDEAL_LINE_ON,
+    COL_IS_SETUP_MENU_VISIBLE, COL_MAIN_DISPLAY_INDEX, COL_SECONDARY_DISPLAY_INDEX,
+    COL_DIRECTION_LIGHTS_LEFT, COL_DIRECTION_LIGHTS_RIGHT, COL_TC_LEVEL, COL_TC_CUT,
+    COL_ENGINE_MAP, COL_ABS_LEVEL, COL_EXHAUST_TEMPERATURE, COL_FINAL_FF,
+    COL_PERFORMANCE_METER, COL_KERB_VIBRATION, COL_SLIP_VIBRATIONS, COL_G_VIBRATIONS,
+    COL_ABS_VIBRATIONS,
+    COL_ACTIVE_CARS, COL_PLAYER_CAR_ID, COL_CAR_COORDINATES, COL_CAR_ID,
+};
 use crate::types::{
-    ControlSample, EnvironmentSample, RecordingSummary, SessionMetadata, SessionSample,
-    TimingSample, LapIndexEntry, CLUSTER_CONTROLS,
+    CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
+    PowertrainSample, RecordingSummary, SessionMetadata, SessionSample,
+    TimingSample, TyreSample, LapIndexEntry, CLUSTER_CONTROLS,
 };
 use std::fs::File;
 use std::io::{Cursor, Read};
@@ -85,8 +117,13 @@ impl BinaryTelemetryReader {
             footer_offset,
         };
 
-        // Try to read lap index after footer
-        let lap_entries = read_lap_index_if_present(&bytes, footer_offset + 24);
+        // Try to read lap index after footer (only when footer exists)
+        let lap_entries = if footer_offset > 0 {
+            let lap_offset = footer_offset + 12 + (index_entries.len() as u64) * IndexEntry::BYTE_LEN as u64 + 28;
+            read_lap_index_if_present(&bytes, lap_offset)
+        } else {
+            Vec::new()
+        };
 
         Ok(Self {
             bytes, header, metadata,
@@ -227,6 +264,71 @@ impl BinaryTelemetryReader {
 
         Ok((header, columns, payload))
     }
+
+    // ---- Motion ----
+    pub fn read_all_motion(&self) -> TelemetryResult<Vec<MotionSample>> {
+        let mut out = Vec::new();
+        for entry in self.index_entries.iter().filter(|e| e.cluster_id == CLUSTER_MOTION) {
+            out.extend(self.read_motion_chunk(entry)?);
+        }
+        Ok(out)
+    }
+    fn read_motion_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<MotionSample>> {
+        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_MOTION)?;
+        decode_motion_payload(payload, &columns, header.sample_count as usize)
+    }
+
+    // ---- Tyres ----
+    pub fn read_all_tyres(&self) -> TelemetryResult<Vec<TyreSample>> {
+        let mut out = Vec::new();
+        for entry in self.index_entries.iter().filter(|e| e.cluster_id == CLUSTER_TYRES) {
+            out.extend(self.read_tyres_chunk(entry)?);
+        }
+        Ok(out)
+    }
+    fn read_tyres_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<TyreSample>> {
+        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_TYRES)?;
+        decode_tyres_payload(payload, &columns, header.sample_count as usize)
+    }
+
+    // ---- Powertrain ----
+    pub fn read_all_powertrain(&self) -> TelemetryResult<Vec<PowertrainSample>> {
+        let mut out = Vec::new();
+        for entry in self.index_entries.iter().filter(|e| e.cluster_id == CLUSTER_POWERTRAIN) {
+            out.extend(self.read_powertrain_chunk(entry)?);
+        }
+        Ok(out)
+    }
+    fn read_powertrain_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<PowertrainSample>> {
+        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_POWERTRAIN)?;
+        decode_powertrain_payload(payload, &columns, header.sample_count as usize)
+    }
+
+    // ---- CarState ----
+    pub fn read_all_car_state(&self) -> TelemetryResult<Vec<CarStateSample>> {
+        let mut out = Vec::new();
+        for entry in self.index_entries.iter().filter(|e| e.cluster_id == CLUSTER_CAR_STATE) {
+            out.extend(self.read_car_state_chunk(entry)?);
+        }
+        Ok(out)
+    }
+    fn read_car_state_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<CarStateSample>> {
+        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_CAR_STATE)?;
+        decode_car_state_payload(payload, &columns, header.sample_count as usize)
+    }
+
+    // ---- OtherCars ----
+    pub fn read_all_other_cars(&self) -> TelemetryResult<Vec<OtherCarsSample>> {
+        let mut out = Vec::new();
+        for entry in self.index_entries.iter().filter(|e| e.cluster_id == CLUSTER_OTHER_CARS) {
+            out.extend(self.read_other_cars_chunk(entry)?);
+        }
+        Ok(out)
+    }
+    fn read_other_cars_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<OtherCarsSample>> {
+        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_OTHER_CARS)?;
+        decode_other_cars_payload(payload, &columns, header.sample_count as usize)
+    }
 }
 
 fn decode_metadata(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
@@ -319,6 +421,17 @@ fn read_index_from_footer(
         return Err(TelemetryError::InvalidFormat("bad index magic".to_string()));
     }
     let entry_count = read_u64(&mut cursor)? as usize;
+
+    // Guard against corrupt / malicious entry_count: must fit within remaining bytes
+    let remaining = bytes.len().saturating_sub(footer_offset as usize);
+    let min_overhead = 40; // INDEX_MAGIC(4) + entry_count_field(8) + FOOTER(28)
+    let max_entries = remaining.saturating_sub(min_overhead) / IndexEntry::BYTE_LEN;
+    if entry_count > max_entries {
+        return Err(TelemetryError::InvalidFormat(format!(
+            "index entry count {entry_count} exceeds max {max_entries}",
+        )));
+    }
+
     let mut entries = Vec::with_capacity(entry_count);
     for _ in 0..entry_count {
         entries.push(IndexEntry::read_from(&mut cursor)?);
@@ -584,7 +697,7 @@ fn decode_environment_payload(
     Ok(out)
 }
 
-fn find_column<'a>(columns: &'a [ColumnEntry], id: u16) -> TelemetryResult<&'a ColumnEntry> {
+fn find_column(columns: &[ColumnEntry], id: u16) -> TelemetryResult<&ColumnEntry> {
     columns
         .iter()
         .find(|column| column.column_id == id)
@@ -662,9 +775,9 @@ fn read_u16_column_array<const N: usize>(
     for i in 0..count {
         let start = i * item_size;
         let mut arr = [0u16; N];
-        for j in 0..N.min(lane_count) {
+        for (j, slot) in arr.iter_mut().enumerate().take(N.min(lane_count)) {
             let off = start + j * 2;
-            arr[j] = u16::from_le_bytes([bytes[off], bytes[off + 1]]);
+            *slot = u16::from_le_bytes([bytes[off], bytes[off + 1]]);
         }
         out.push(arr);
     }
@@ -714,4 +827,278 @@ fn read_lap_index_if_present(bytes: &[u8], start: u64) -> Vec<LapIndexEntry> {
         off += entry_size;
     }
     entries
+}
+// ---- f32 array column helper ----
+fn read_f32_column_array<const N: usize>(
+    payload: &[u8],
+    columns: &[ColumnEntry],
+    id: u16,
+    count: usize,
+) -> TelemetryResult<Vec<[f32; N]>> {
+    let column = find_column(columns, id)?;
+    let item_size = N * 4;
+    let bytes = column_bytes(payload, column, count, item_size)?;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let start = i * item_size;
+        let mut arr = [0.0f32; N];
+        for (j, slot) in arr.iter_mut().enumerate().take(N) {
+            let off = start + j * 4;
+            *slot = f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+        }
+        out.push(arr);
+    }
+    Ok(out)
+}
+
+// ---- Motion decode (9 columns) ----
+fn decode_motion_payload(
+    payload: &[u8],
+    columns: &[ColumnEntry],
+    count: usize,
+) -> TelemetryResult<Vec<MotionSample>> {
+    let ticks = read_u64_column(payload, columns, COL_SAMPLE_TICK, count)?;
+    let timestamps = read_u64_column(payload, columns, COL_TIMESTAMP_NS, count)?;
+    let velocity = read_f32_column_array::<3>(payload, columns, COL_VELOCITY, count)?;
+    let acc_g = read_f32_column_array::<3>(payload, columns, COL_ACC_G, count)?;
+    let local_velocity = read_f32_column_array::<3>(payload, columns, COL_LOCAL_VELOCITY, count)?;
+    let local_angular_vel = read_f32_column_array::<3>(payload, columns, COL_LOCAL_ANGULAR_VEL, count)?;
+    let heading = read_f32_column(payload, columns, COL_HEADING, count)?;
+    let pitch = read_f32_column(payload, columns, COL_PITCH, count)?;
+    let roll = read_f32_column(payload, columns, COL_ROLL, count)?;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        out.push(MotionSample {
+            sample_tick: ticks[i], timestamp_ns: timestamps[i],
+            velocity: velocity[i], acc_g: acc_g[i],
+            local_velocity: local_velocity[i], local_angular_vel: local_angular_vel[i],
+            heading: heading[i], pitch: pitch[i], roll: roll[i],
+        });
+    }
+    Ok(out)
+}
+
+// ---- Tyres decode (31 columns) ----
+fn decode_tyres_payload(
+    payload: &[u8],
+    columns: &[ColumnEntry],
+    count: usize,
+) -> TelemetryResult<Vec<TyreSample>> {
+    let ticks = read_u64_column(payload, columns, COL_SAMPLE_TICK, count)?;
+    let timestamps = read_u64_column(payload, columns, COL_TIMESTAMP_NS, count)?;
+    let wheel_slip = read_f32_column_array::<4>(payload, columns, COL_WHEEL_SLIP, count)?;
+    let wheel_load = read_f32_column_array::<4>(payload, columns, COL_WHEEL_LOAD, count)?;
+    let wheels_pressure = read_f32_column_array::<4>(payload, columns, COL_WHEELS_PRESSURE, count)?;
+    let wheel_angular_speed = read_f32_column_array::<4>(payload, columns, COL_WHEEL_ANGULAR_SPEED, count)?;
+    let tyre_wear = read_f32_column_array::<4>(payload, columns, COL_TYRE_WEAR, count)?;
+    let tyre_dirty_level = read_f32_column_array::<4>(payload, columns, COL_TYRE_DIRTY_LEVEL, count)?;
+    let tyre_core_temperature = read_f32_column_array::<4>(payload, columns, COL_TYRE_CORE_TEMPERATURE, count)?;
+    let camber_rad = read_f32_column_array::<4>(payload, columns, COL_CAMBER_RAD, count)?;
+    let suspension_travel = read_f32_column_array::<4>(payload, columns, COL_SUSPENSION_TRAVEL, count)?;
+    let slip_ratio = read_f32_column_array::<4>(payload, columns, COL_SLIP_RATIO, count)?;
+    let slip_angle = read_f32_column_array::<4>(payload, columns, COL_SLIP_ANGLE, count)?;
+    let tyre_temp_i = read_f32_column_array::<4>(payload, columns, COL_TYRE_TEMP_I, count)?;
+    let tyre_temp_m = read_f32_column_array::<4>(payload, columns, COL_TYRE_TEMP_M, count)?;
+    let tyre_temp_o = read_f32_column_array::<4>(payload, columns, COL_TYRE_TEMP_O, count)?;
+    let tyre_temp = read_f32_column_array::<4>(payload, columns, COL_TYRE_TEMP, count)?;
+    let mz = read_f32_column_array::<4>(payload, columns, COL_MZ, count)?;
+    let fx = read_f32_column_array::<4>(payload, columns, COL_FX, count)?;
+    let fy = read_f32_column_array::<4>(payload, columns, COL_FY, count)?;
+    let suspension_damage = read_f32_column_array::<4>(payload, columns, COL_SUSPENSION_DAMAGE, count)?;
+    let brake_temp = read_f32_column_array::<4>(payload, columns, COL_BRAKE_TEMP, count)?;
+    let brake_pressure = read_f32_column_array::<4>(payload, columns, COL_BRAKE_PRESSURE, count)?;
+    let pad_life = read_f32_column_array::<4>(payload, columns, COL_PAD_LIFE, count)?;
+    let disc_life = read_f32_column_array::<4>(payload, columns, COL_DISC_LIFE, count)?;
+    let tyre_contact_point = read_f32_column_array::<12>(payload, columns, COL_TYRE_CONTACT_POINT, count)?;
+    let tyre_contact_normal = read_f32_column_array::<12>(payload, columns, COL_TYRE_CONTACT_NORMAL, count)?;
+    let tyre_contact_heading = read_f32_column_array::<12>(payload, columns, COL_TYRE_CONTACT_HEADING, count)?;
+    let number_of_tyres_out = read_i32_column(payload, columns, COL_NUMBER_OF_TYRES_OUT, count)?;
+    let front_brake_compound = read_i32_column(payload, columns, COL_FRONT_BRAKE_COMPOUND, count)?;
+    let rear_brake_compound = read_i32_column(payload, columns, COL_REAR_BRAKE_COMPOUND, count)?;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        out.push(TyreSample {
+            sample_tick: ticks[i], timestamp_ns: timestamps[i],
+            wheel_slip: wheel_slip[i], wheel_load: wheel_load[i],
+            wheels_pressure: wheels_pressure[i], wheel_angular_speed: wheel_angular_speed[i],
+            tyre_wear: tyre_wear[i], tyre_dirty_level: tyre_dirty_level[i],
+            tyre_core_temperature: tyre_core_temperature[i], camber_rad: camber_rad[i],
+            suspension_travel: suspension_travel[i], slip_ratio: slip_ratio[i],
+            slip_angle: slip_angle[i], tyre_temp_i: tyre_temp_i[i], tyre_temp_m: tyre_temp_m[i],
+            tyre_temp_o: tyre_temp_o[i], tyre_temp: tyre_temp[i], mz: mz[i], fx: fx[i], fy: fy[i],
+            suspension_damage: suspension_damage[i], brake_temp: brake_temp[i],
+            brake_pressure: brake_pressure[i], pad_life: pad_life[i], disc_life: disc_life[i],
+            tyre_contact_point: tyre_contact_point[i], tyre_contact_normal: tyre_contact_normal[i],
+            tyre_contact_heading: tyre_contact_heading[i],
+            number_of_tyres_out: number_of_tyres_out[i],
+            front_brake_compound: front_brake_compound[i],
+            rear_brake_compound: rear_brake_compound[i],
+        });
+    }
+    Ok(out)
+}
+
+// ---- Powertrain decode (24 columns, all scalars) ----
+fn decode_powertrain_payload(
+    payload: &[u8],
+    columns: &[ColumnEntry],
+    count: usize,
+) -> TelemetryResult<Vec<PowertrainSample>> {
+    let ticks = read_u64_column(payload, columns, COL_SAMPLE_TICK, count)?;
+    let timestamps = read_u64_column(payload, columns, COL_TIMESTAMP_NS, count)?;
+    let turbo_boost = read_f32_column(payload, columns, COL_TURBO_BOOST, count)?;
+    let ballast = read_f32_column(payload, columns, COL_BALLAST, count)?;
+    let kers_charge = read_f32_column(payload, columns, COL_KERS_CHARGE, count)?;
+    let kers_input = read_f32_column(payload, columns, COL_KERS_INPUT, count)?;
+    let kers_current_kj = read_f32_column(payload, columns, COL_KERS_CURRENT_KJ, count)?;
+    let drs = read_f32_column(payload, columns, COL_DRS, count)?;
+    let tc = read_f32_column(payload, columns, COL_TC_PHYSICS, count)?;
+    let abs = read_f32_column(payload, columns, COL_ABS_PHYSICS, count)?;
+    let engine_brake = read_i32_column(payload, columns, COL_ENGINE_BRAKE, count)?;
+    let ers_recovery_level = read_i32_column(payload, columns, COL_ERS_RECOVERY_LEVEL, count)?;
+    let ers_power_level = read_i32_column(payload, columns, COL_ERS_POWER_LEVEL, count)?;
+    let ers_heat_charging = read_i32_column(payload, columns, COL_ERS_HEAT_CHARGING, count)?;
+    let ers_is_charging = read_i32_column(payload, columns, COL_ERS_IS_CHARGING, count)?;
+    let drs_available = read_i32_column(payload, columns, COL_DRS_AVAILABLE, count)?;
+    let drs_enabled = read_i32_column(payload, columns, COL_DRS_ENABLED, count)?;
+    let tc_in_action = read_i32_column(payload, columns, COL_TC_IN_ACTION, count)?;
+    let abs_in_action = read_i32_column(payload, columns, COL_ABS_IN_ACTION, count)?;
+    let auto_shifter_on = read_i32_column(payload, columns, COL_AUTO_SHIFTER_ON, count)?;
+    let current_max_rpm = read_i32_column(payload, columns, COL_CURRENT_MAX_RPM, count)?;
+    let p2p_activations = read_i32_column(payload, columns, COL_P2P_ACTIVATIONS, count)?;
+    let p2p_status = read_i32_column(payload, columns, COL_P2P_STATUS, count)?;
+    let water_temp = read_f32_column(payload, columns, COL_WATER_TEMP, count)?;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        out.push(PowertrainSample {
+            sample_tick: ticks[i], timestamp_ns: timestamps[i],
+            turbo_boost: turbo_boost[i], ballast: ballast[i],
+            kers_charge: kers_charge[i], kers_input: kers_input[i],
+            kers_current_kj: kers_current_kj[i], drs: drs[i], tc: tc[i], abs: abs[i],
+            engine_brake: engine_brake[i], ers_recovery_level: ers_recovery_level[i],
+            ers_power_level: ers_power_level[i], ers_heat_charging: ers_heat_charging[i],
+            ers_is_charging: ers_is_charging[i], drs_available: drs_available[i],
+            drs_enabled: drs_enabled[i], tc_in_action: tc_in_action[i],
+            abs_in_action: abs_in_action[i], auto_shifter_on: auto_shifter_on[i],
+            current_max_rpm: current_max_rpm[i], p2p_activations: p2p_activations[i],
+            p2p_status: p2p_status[i], water_temp: water_temp[i],
+        });
+    }
+    Ok(out)
+}
+
+// ---- CarState decode (42 columns) ----
+fn decode_car_state_payload(
+    payload: &[u8],
+    columns: &[ColumnEntry],
+    count: usize,
+) -> TelemetryResult<Vec<CarStateSample>> {
+    let ticks = read_u64_column(payload, columns, COL_SAMPLE_TICK, count)?;
+    let timestamps = read_u64_column(payload, columns, COL_TIMESTAMP_NS, count)?;
+    let car_damage = read_f32_column_array::<5>(payload, columns, COL_CAR_DAMAGE, count)?;
+    let pit_limiter_on = read_i32_column(payload, columns, COL_PIT_LIMITER_ON, count)?;
+    let ride_height = read_f32_column_array::<2>(payload, columns, COL_RIDE_HEIGHT, count)?;
+    let ignition_on = read_i32_column(payload, columns, COL_IGNITION_ON, count)?;
+    let starter_engine_on = read_i32_column(payload, columns, COL_STARTER_ENGINE_ON, count)?;
+    let is_engine_running = read_i32_column(payload, columns, COL_IS_ENGINE_RUNNING, count)?;
+    let is_ai_controlled = read_i32_column(payload, columns, COL_IS_AI_CONTROLLED, count)?;
+    let cg_height = read_f32_column(payload, columns, COL_CG_HEIGHT, count)?;
+    let brake_bias = read_f32_column(payload, columns, COL_BRAKE_BIAS, count)?;
+    let rain_lights = read_i32_column(payload, columns, COL_RAIN_LIGHTS, count)?;
+    let flashing_lights = read_i32_column(payload, columns, COL_FLASHING_LIGHTS, count)?;
+    let lights_stage = read_i32_column(payload, columns, COL_LIGHTS_STAGE, count)?;
+    let wiper_lv = read_i32_column(payload, columns, COL_WIPER_LV, count)?;
+    let driver_stint_total_time_left = read_i32_column(payload, columns, COL_DRIVER_STINT_TOTAL_TIME_LEFT, count)?;
+    let driver_stint_time_left = read_i32_column(payload, columns, COL_DRIVER_STINT_TIME_LEFT, count)?;
+    let rain_tyres = read_i32_column(payload, columns, COL_RAIN_TYRES, count)?;
+    let current_tyre_set = read_i32_column(payload, columns, COL_CURRENT_TYRE_SET, count)?;
+    let strategy_tyre_set = read_i32_column(payload, columns, COL_STRATEGY_TYRE_SET, count)?;
+    let track_grip_status = read_i32_column(payload, columns, COL_TRACK_GRIP_STATUS, count)?;
+    let tyre_compound_str = read_u16_column_array::<33>(payload, columns, COL_TYRE_COMPOUND_STR, count, 33)?;
+    let mfd_tyre_set = read_i32_column(payload, columns, COL_MFD_TYRE_SET, count)?;
+    let mfd_fuel_to_add = read_f32_column(payload, columns, COL_MFD_FUEL_TO_ADD, count)?;
+    let mfd_tyre_pressure = read_f32_column_array::<4>(payload, columns, COL_MFD_TYRE_PRESSURE, count)?;
+    let ideal_line_on = read_i32_column(payload, columns, COL_IDEAL_LINE_ON, count)?;
+    let is_setup_menu_visible = read_i32_column(payload, columns, COL_IS_SETUP_MENU_VISIBLE, count)?;
+    let main_display_index = read_i32_column(payload, columns, COL_MAIN_DISPLAY_INDEX, count)?;
+    let secondary_display_index = read_i32_column(payload, columns, COL_SECONDARY_DISPLAY_INDEX, count)?;
+    let direction_lights_left = read_i32_column(payload, columns, COL_DIRECTION_LIGHTS_LEFT, count)?;
+    let direction_lights_right = read_i32_column(payload, columns, COL_DIRECTION_LIGHTS_RIGHT, count)?;
+    let tc_level = read_i32_column(payload, columns, COL_TC_LEVEL, count)?;
+    let tc_cut = read_i32_column(payload, columns, COL_TC_CUT, count)?;
+    let engine_map = read_i32_column(payload, columns, COL_ENGINE_MAP, count)?;
+    let abs_level = read_i32_column(payload, columns, COL_ABS_LEVEL, count)?;
+    let exhaust_temperature = read_f32_column(payload, columns, COL_EXHAUST_TEMPERATURE, count)?;
+    let final_ff = read_f32_column(payload, columns, COL_FINAL_FF, count)?;
+    let performance_meter = read_f32_column(payload, columns, COL_PERFORMANCE_METER, count)?;
+    let kerb_vibration = read_f32_column(payload, columns, COL_KERB_VIBRATION, count)?;
+    let slip_vibrations = read_f32_column(payload, columns, COL_SLIP_VIBRATIONS, count)?;
+    let g_vibrations = read_f32_column(payload, columns, COL_G_VIBRATIONS, count)?;
+    let abs_vibrations = read_f32_column(payload, columns, COL_ABS_VIBRATIONS, count)?;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        out.push(CarStateSample {
+            sample_tick: ticks[i], timestamp_ns: timestamps[i],
+            car_damage: car_damage[i], pit_limiter_on: pit_limiter_on[i],
+            ride_height: ride_height[i], ignition_on: ignition_on[i],
+            starter_engine_on: starter_engine_on[i], is_engine_running: is_engine_running[i],
+            is_ai_controlled: is_ai_controlled[i], cg_height: cg_height[i],
+            brake_bias: brake_bias[i], rain_lights: rain_lights[i],
+            flashing_lights: flashing_lights[i], lights_stage: lights_stage[i],
+            wiper_lv: wiper_lv[i], driver_stint_total_time_left: driver_stint_total_time_left[i],
+            driver_stint_time_left: driver_stint_time_left[i], rain_tyres: rain_tyres[i],
+            current_tyre_set: current_tyre_set[i], strategy_tyre_set: strategy_tyre_set[i],
+            track_grip_status: track_grip_status[i], tyre_compound_str: tyre_compound_str[i],
+            mfd_tyre_set: mfd_tyre_set[i], mfd_fuel_to_add: mfd_fuel_to_add[i],
+            mfd_tyre_pressure: mfd_tyre_pressure[i], ideal_line_on: ideal_line_on[i],
+            is_setup_menu_visible: is_setup_menu_visible[i],
+            main_display_index: main_display_index[i],
+            secondary_display_index: secondary_display_index[i],
+            direction_lights_left: direction_lights_left[i],
+            direction_lights_right: direction_lights_right[i],
+            tc_level: tc_level[i], tc_cut: tc_cut[i], engine_map: engine_map[i],
+            abs_level: abs_level[i], exhaust_temperature: exhaust_temperature[i],
+            final_ff: final_ff[i], performance_meter: performance_meter[i],
+            kerb_vibration: kerb_vibration[i], slip_vibrations: slip_vibrations[i],
+            g_vibrations: g_vibrations[i], abs_vibrations: abs_vibrations[i],
+        });
+    }
+    Ok(out)
+}
+
+// ---- OtherCars decode (6 columns) ----
+fn decode_other_cars_payload(
+    payload: &[u8],
+    columns: &[ColumnEntry],
+    count: usize,
+) -> TelemetryResult<Vec<OtherCarsSample>> {
+    let ticks = read_u64_column(payload, columns, COL_SAMPLE_TICK, count)?;
+    let timestamps = read_u64_column(payload, columns, COL_TIMESTAMP_NS, count)?;
+    let active_cars = read_i32_column(payload, columns, COL_ACTIVE_CARS, count)?;
+    let player_car_id = read_i32_column(payload, columns, COL_PLAYER_CAR_ID, count)?;
+    let coord_col = find_column(columns, COL_CAR_COORDINATES)?;
+    let coord_bytes = column_bytes(payload, coord_col, count, 720)?; // 180 f32
+    let id_col = find_column(columns, COL_CAR_ID)?;
+    let id_bytes = column_bytes(payload, id_col, count, 240)?; // 60 i32
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let mut coord_vec = Vec::with_capacity(180);
+        let cs = i * 720;
+        for j in 0..180 {
+            let off = cs + j * 4;
+            coord_vec.push(f32::from_le_bytes([coord_bytes[off], coord_bytes[off+1], coord_bytes[off+2], coord_bytes[off+3]]));
+        }
+        let mut id_vec = Vec::with_capacity(60);
+        let is = i * 240;
+        for j in 0..60 {
+            let off = is + j * 4;
+            id_vec.push(i32::from_le_bytes([id_bytes[off], id_bytes[off+1], id_bytes[off+2], id_bytes[off+3]]));
+        }
+        out.push(OtherCarsSample {
+            sample_tick: ticks[i], timestamp_ns: timestamps[i],
+            active_cars: active_cars[i], player_car_id: player_car_id[i],
+            car_coordinates: coord_vec, car_id: id_vec,
+        });
+    }
+    Ok(out)
 }
