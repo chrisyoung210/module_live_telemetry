@@ -18,7 +18,7 @@ pub mod registry;
 
 pub use context::ComputeContext;
 pub use items::{BatchComputeItem, RealtimeComputeItem};
-// pub use registry::ComputeRegistry;  // Uncomment after Task 6
+pub use registry::ComputeRegistry;
 
 /// 计算项执行结果
 pub type ComputeResult<T> = Result<T, ComputeError>;

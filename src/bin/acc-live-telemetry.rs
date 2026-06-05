@@ -3,7 +3,11 @@
     BinaryTelemetryReader, BinaryTelemetryWriter, ControlSample,
     LapIndexEntry, LiveTelemetryConfig, SessionMetadata, SPageFileStatic,
     TelemetryError, TelemetryResult, TimingSample,
+    compute::{ComputeRegistry, items::SpeedMps},
+    dashboard::{spawn_dashboard, sink::ChannelSink, service::DashboardService},
+    distributor::TelemetryDistributor,
 };
+use crossbeam_channel::bounded;
 use std::env;
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, Write};
@@ -35,6 +39,7 @@ fn run() -> TelemetryResult<()> {
         "parse-raw" => parse_raw_command(&args),
         "build-lap-index" => build_lap_index_command(&args),
         "export-lap-field" => export_lap_field_command(&args),
+        "serve" => serve_command(&args),
         "help" | "--help" | "-h" => {
             print_usage();
             Ok(())
@@ -52,6 +57,8 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
     let chunk_rows = optional_usize(args, "--chunk-rows", 256)?;
     let status_interval_ms = optional_u64(args, "--status-interval-ms", 2000)?;
     let flush_interval_ms = optional_u64(args, "--flush-interval-ms", 2000)?;
+    let dashboard = args.iter().any(|a| a == "--dashboard");
+    let dashboard_interval_ms = optional_u64(args, "--dashboard-interval-ms", 50)?;
     let poll_interval = Duration::from_secs_f64(1.0 / poll_hz.max(1.0));
     let status_interval = Duration::from_millis(status_interval_ms.max(250));
     let flush_interval = if flush_interval_ms == 0 {
@@ -74,6 +81,27 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
     let mut last_status_log = Instant::now() - status_interval;
     let mut last_flush = Instant::now();
     let mut last_status: Option<AccGameStatus> = None;
+
+    // Setup dashboard if requested
+    let mut dashboard_distributor: Option<TelemetryDistributor> = None;
+    let _dashboard_handle = if dashboard {
+        let mut reg = ComputeRegistry::new();
+        reg.register_realtime(Box::new(SpeedMps));
+
+        let mut dist = TelemetryDistributor::new(64);
+        let dash_rx = dist.add_consumer();
+
+        let (sink_tx, _sink_rx) = bounded::<std::collections::HashMap<String, f64>>(64);
+        let sink = ChannelSink::new(sink_tx);
+        let mut dash_svc = DashboardService::new(reg, Box::new(sink));
+        dash_svc.subscribe("speed_mps".into(), Duration::from_millis(dashboard_interval_ms));
+
+        let handle = spawn_dashboard(dash_svc, dash_rx);
+        dashboard_distributor = Some(dist);
+        Some(handle)
+    } else {
+        None
+    };
 
     loop {
         let tick_start = Instant::now();
@@ -172,6 +200,11 @@ println!("connected to ACC shared memory");
                 .min(u64::MAX as u128) as u64;
             match active_reader.read_telemetry_frame(sample_tick, timestamp_ns) {
                 Ok(Some(frame)) => {
+                    // Distribute to dashboard (if active)
+                    if let Some(ref dist) = dashboard_distributor {
+                        dist.distribute(frame.clone());
+                    }
+                    // Write to file (if active)
                     if let Some(active_writer) = writer.as_mut() {
                         active_writer.write_frame(frame)?;
                     }
@@ -1174,11 +1207,86 @@ fn utf16_trim(arr: &[u16]) -> String {
     )
 }
 
+fn serve_command(args: &[String]) -> TelemetryResult<()> {
+    let poll_hz = optional_f64(args, "--poll-hz", 120.0)?;
+    let interval_ms = optional_u64(args, "--interval-ms", 50)?;
+    let poll_interval = Duration::from_secs_f64(1.0 / poll_hz.max(1.0));
+    let status_interval = Duration::from_millis(2000);
+
+    // Setup registry with built-in items
+    let mut registry = ComputeRegistry::new();
+    registry.register_realtime(Box::new(SpeedMps));
+
+    // Setup distributor + dashboard
+    let mut distributor = TelemetryDistributor::new(64);
+    let dashboard_rx = distributor.add_consumer();
+
+    let (sink_tx, _sink_rx) = bounded::<std::collections::HashMap<String, f64>>(64);
+    let sink = ChannelSink::new(sink_tx);
+    let mut dashboard = DashboardService::new(registry, Box::new(sink));
+    dashboard.subscribe("speed_mps".into(), Duration::from_millis(interval_ms));
+
+    let _handle = spawn_dashboard(dashboard, dashboard_rx);
+
+    println!("serve: polling at {poll_hz} Hz, dashboard interval {interval_ms} ms");
+    println!("waiting for ACC shared memory...");
+
+    let mut reader: Option<AccSharedMemoryReader> = None;
+    let mut last_status_log = Instant::now() - status_interval;
+    let mut started_at = Instant::now();
+    let mut sample_tick = 0u64;
+
+    loop {
+        let tick_start = Instant::now();
+
+        if reader.is_none() {
+            match AccSharedMemoryReader::open() {
+                Ok(opened) => {
+                    println!("connected to ACC shared memory");
+                    reader = Some(opened);
+                    started_at = Instant::now();
+                }
+                Err(err) => {
+                    if last_status_log.elapsed() >= status_interval {
+                        println!("ACC not available yet: {err}");
+                        last_status_log = Instant::now();
+                    }
+                    sleep_remaining(tick_start, poll_interval);
+                    continue;
+                }
+            }
+        }
+
+        let active_reader = reader.as_mut().expect("reader exists");
+        let status = active_reader.status()?;
+        if !status.is_live() {
+            sleep_remaining(tick_start, poll_interval);
+            continue;
+        }
+
+        let timestamp_ns = started_at.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        match active_reader.read_telemetry_frame(sample_tick, timestamp_ns) {
+            Ok(Some(frame)) => {
+                distributor.distribute(frame);
+                sample_tick = sample_tick.saturating_add(1);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                eprintln!("read error: {err}; reconnecting...");
+                reader = None;
+            }
+        }
+
+        sleep_remaining(tick_start, poll_interval);
+    }
+}
+
 fn print_usage() {
     println!(
         "ACC live telemetry\n\n\
 commands:\n  \
-record [--out <file> | --out-dir <dir>] [--poll-hz 120] [--chunk-rows 256]\n  \
+record [--out <file> | --out-dir <dir>] [--poll-hz 120] [--chunk-rows 256] [--dashboard [--dashboard-interval-ms 50]]\n  \
+serve [--poll-hz 120] [--interval-ms 50]\n  \
 record-raw --out <file> [--poll-hz 120] [--status-interval-ms 2000]\n  \
 inspect --input <file>\n  \
 export --input <file> [--out <file>] [--format csv]\n  \

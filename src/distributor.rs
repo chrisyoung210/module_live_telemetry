@@ -15,7 +15,8 @@ use std::sync::Arc;
 /// # 使用示例
 ///
 /// ```no_run
-/// use module_live_telemetry::compute::{ComputeRegistry, TelemetryDistributor};
+/// use module_live_telemetry::compute::ComputeRegistry;
+/// use module_live_telemetry::distributor::TelemetryDistributor;
 ///
 /// let mut distributor = TelemetryDistributor::new(64);
 /// let recorder_rx = distributor.add_consumer();
