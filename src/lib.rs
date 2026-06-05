@@ -1,3 +1,4 @@
+pub mod compute;
 pub mod error;
 pub mod format;
 pub mod reader;
