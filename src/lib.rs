@@ -1,4 +1,5 @@
 pub mod compute;
+pub mod dashboard;
 pub mod distributor;
 pub mod error;
 pub mod format;
