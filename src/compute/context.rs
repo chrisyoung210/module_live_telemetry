@@ -15,6 +15,21 @@ pub struct ReferenceSource {
     pub lap_number: i32,
 }
 
+/// 实时计算请求
+///
+/// 由调用方（如 DashboardService）构建，包含计算单一实时项所需的所有信息。
+/// 所有数据由调用方显式传入，不依赖隐藏全局状态。
+pub struct RealtimeComputeRequest<'a> {
+    /// 当前遥测帧
+    pub current_frame: &'a TelemetryFrame,
+    /// 已计算的其他计算项结果（按注册顺序）
+    pub computed_values: &'a HashMap<String, f64>,
+    /// 历史参考圈数据（可选）
+    pub reference_lap: Option<&'a [TelemetryFrame]>,
+    /// 参考数据来源（用于缓存管理和调试）
+    pub reference_source: Option<ReferenceSource>,
+}
+
 /// 计算上下文
 ///
 /// 在执行计算项时传递，包含：

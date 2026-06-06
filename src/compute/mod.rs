@@ -16,7 +16,7 @@ pub mod context;
 pub mod items;
 pub mod registry;
 
-pub use context::ComputeContext;
+pub use context::{ComputeContext, RealtimeComputeRequest};
 pub use items::{BatchComputeItem, RealtimeComputeItem};
 pub use registry::ComputeRegistry;
 
@@ -51,6 +51,12 @@ impl std::error::Error for ComputeError {}
 
 impl From<std::io::Error> for ComputeError {
     fn from(e: std::io::Error) -> Self {
+        Self::ComputationFailed(e.to_string())
+    }
+}
+
+impl From<crate::TelemetryError> for ComputeError {
+    fn from(e: crate::TelemetryError) -> Self {
         Self::ComputationFailed(e.to_string())
     }
 }

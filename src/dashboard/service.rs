@@ -3,6 +3,7 @@
 //! 管理计算项订阅、按频率调度计算、聚合结果并通过 DataSink 回传。
 
 use crate::compute::ComputeRegistry;
+use crate::compute::context::ReferenceSource;
 use crate::dashboard::sink::DataSink;
 use crate::TelemetryFrame;
 use crossbeam_channel::Receiver;
@@ -28,7 +29,7 @@ use std::time::{Duration, Instant};
 /// let (tx, rx) = bounded(10);
 /// let sink = ChannelSink::new(tx);
 /// let mut service = DashboardService::new(registry, Box::new(sink));
-/// service.subscribe("speed_mps".into(), Duration::from_millis(50));
+/// service.subscribe("speed_mps".into(), Duration::from_millis(50), None);
 /// ```
 pub struct DashboardService {
     registry: ComputeRegistry,
@@ -37,6 +38,10 @@ pub struct DashboardService {
     subscriptions: HashMap<String, Duration>,
     /// item_name → 下次计算时间
     next_schedule: HashMap<String, Instant>,
+    /// item_name → 参考圈数据来源（None 表示不需要参考圈）
+    reference_sources: HashMap<String, Option<ReferenceSource>>,
+    /// 是否已经报告过 sink 发送错误（每个 service 实例只报告一次）
+    sink_error_reported: bool,
 }
 
 impl DashboardService {
@@ -47,6 +52,8 @@ impl DashboardService {
             sink,
             subscriptions: HashMap::new(),
             next_schedule: HashMap::new(),
+            reference_sources: HashMap::new(),
+            sink_error_reported: false,
         }
     }
 
@@ -54,16 +61,25 @@ impl DashboardService {
     ///
     /// `item_name` 必须已在 ComputeRegistry 中注册。
     /// `interval` 指定该 item 的计算频率。
-    pub fn subscribe(&mut self, item_name: String, interval: Duration) {
+    /// `reference_source` 为动态计算项提供参考圈数据来源（静态计算项可传 `None`）。
+    pub fn subscribe(
+        &mut self,
+        item_name: String,
+        interval: Duration,
+        reference_source: Option<ReferenceSource>,
+    ) {
         self.subscriptions.insert(item_name.clone(), interval);
         self.next_schedule
-            .insert(item_name, Instant::now() + interval);
+            .insert(item_name.clone(), Instant::now() + interval);
+        self.reference_sources
+            .insert(item_name, reference_source);
     }
 
     /// 取消订阅
     pub fn unsubscribe(&mut self, item_name: &str) {
         self.subscriptions.remove(item_name);
         self.next_schedule.remove(item_name);
+        self.reference_sources.remove(item_name);
     }
 
     /// 获取当前订阅数
@@ -79,10 +95,12 @@ impl DashboardService {
     /// 主运行循环
     ///
     /// 从 `receiver` 接收遥测帧。每收到一帧，检查哪些订阅的 item 到了计算时间，
-    /// 执行这些 item 的计算，聚合结果并通过 sink 回传。
+    /// 为每个到期项独立构建计算上下文（包括参考圈），计算结果并通过 sink 回传。
     ///
     /// 当 `receiver` 断开（发送端被 drop）时，循环自动退出。
     pub fn run(&mut self, receiver: Receiver<Arc<TelemetryFrame>>) {
+        use crate::compute::RealtimeComputeRequest;
+
         for frame_arc in receiver {
             let now = Instant::now();
             let frame = &*frame_arc;
@@ -104,14 +122,42 @@ impl DashboardService {
                 continue;
             }
 
-            // 执行所有已注册的实时计算项（但只收集被订阅的）
-            let all_results = self.registry.compute_realtime(frame);
-
-            // 过滤：只保留被订阅且本轮到期的 items
+            // 逐项计算：每个 item 获得独立的上下文（包括参考圈）
             let mut sparse_result = HashMap::new();
             for name in &items_to_compute {
-                if let Some(value) = all_results.get(name) {
-                    sparse_result.insert(name.clone(), *value);
+                // 解析参考圈（如果该 item 订阅时携带了 ReferenceSource）
+                // 使用 Arc 避免引用 self.registry 跨越 compute_realtime_item 的可变借用
+                let reference_arc = if let Some(Some(ref source)) = self.reference_sources.get(name) {
+                    match self.registry.resolve_reference_lap(source) {
+                        Ok(arc) => Some(arc),
+                        Err(err) => {
+                            eprintln!("dashboard: failed to load reference lap for '{name}': {err}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let reference_lap = reference_arc.as_ref().map(|arc| arc.as_slice());
+
+                let request = RealtimeComputeRequest {
+                    current_frame: frame,
+                    computed_values: &sparse_result,
+                    reference_lap,
+                    reference_source: self
+                        .reference_sources
+                        .get(name)
+                        .and_then(|r| r.clone()),
+                };
+
+                match self.registry.compute_realtime(name, &request) {
+                    Ok(value) => {
+                        sparse_result.insert(name.clone(), value);
+                    }
+                    Err(err) => {
+                        eprintln!("dashboard: compute item '{name}' failed: {err}");
+                    }
                 }
 
                 // 更新下次计算时间
@@ -122,7 +168,12 @@ impl DashboardService {
 
             // 通过 sink 回传
             if !sparse_result.is_empty() {
-                self.sink.send(sparse_result);
+                if let Err(err) = self.sink.send(sparse_result) {
+                    if !self.sink_error_reported {
+                        eprintln!("dashboard sink send failed: {err}; subsequent errors suppressed");
+                        self.sink_error_reported = true;
+                    }
+                }
             }
         }
     }
@@ -178,7 +229,7 @@ mod tests {
 
         assert_eq!(service.subscription_count(), 0);
 
-        service.subscribe("speed_mps".into(), Duration::from_millis(100));
+        service.subscribe("speed_mps".into(), Duration::from_millis(100), None);
         assert!(service.is_subscribed("speed_mps"));
         assert_eq!(service.subscription_count(), 1);
 
@@ -215,7 +266,7 @@ mod tests {
             DashboardService::new(reg, Box::new(ChannelSink::new(data_tx)));
 
         // Subscribe with a very short interval so it triggers on the first frame
-        service.subscribe("speed_mps".into(), Duration::from_nanos(1));
+        service.subscribe("speed_mps".into(), Duration::from_nanos(1), None);
 
         // Send a frame
         frame_tx.send(Arc::new(make_frame(100.0))).unwrap();

@@ -91,10 +91,23 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
         let mut dist = TelemetryDistributor::new(64);
         let dash_rx = dist.add_consumer();
 
-        let (sink_tx, _sink_rx) = bounded::<std::collections::HashMap<String, f64>>(64);
+        let (sink_tx, sink_rx) = bounded::<std::collections::HashMap<String, f64>>(64);
         let sink = ChannelSink::new(sink_tx);
         let mut dash_svc = DashboardService::new(reg, Box::new(sink));
-        dash_svc.subscribe("speed_mps".into(), Duration::from_millis(dashboard_interval_ms));
+        dash_svc.subscribe("speed_mps".into(), Duration::from_millis(dashboard_interval_ms), None);
+
+        // Start output thread to print dashboard data as simple text
+        std::thread::spawn(move || {
+            while let Ok(data) = sink_rx.recv() {
+                let parts: Vec<String> = data
+                    .iter()
+                    .map(|(k, v)| format!("{}={:.4}", k, v))
+                    .collect();
+                if !parts.is_empty() {
+                    println!("DASHBOARD {}", parts.join(" "));
+                }
+            }
+        });
 
         let handle = spawn_dashboard(dash_svc, dash_rx);
         dashboard_distributor = Some(dist);
@@ -1221,10 +1234,23 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
     let mut distributor = TelemetryDistributor::new(64);
     let dashboard_rx = distributor.add_consumer();
 
-    let (sink_tx, _sink_rx) = bounded::<std::collections::HashMap<String, f64>>(64);
+    let (sink_tx, sink_rx) = bounded::<std::collections::HashMap<String, f64>>(64);
     let sink = ChannelSink::new(sink_tx);
     let mut dashboard = DashboardService::new(registry, Box::new(sink));
-    dashboard.subscribe("speed_mps".into(), Duration::from_millis(interval_ms));
+    dashboard.subscribe("speed_mps".into(), Duration::from_millis(interval_ms), None);
+
+    // Start output thread to print dashboard data as simple text
+    std::thread::spawn(move || {
+        while let Ok(data) = sink_rx.recv() {
+            let parts: Vec<String> = data
+                .iter()
+                .map(|(k, v)| format!("{}={:.4}", k, v))
+                .collect();
+            if !parts.is_empty() {
+                println!("DASHBOARD {}", parts.join(" "));
+            }
+        }
+    });
 
     let _handle = spawn_dashboard(dashboard, dashboard_rx);
 

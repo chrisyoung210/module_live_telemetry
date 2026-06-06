@@ -7,6 +7,26 @@
 use crossbeam_channel::Sender;
 use std::collections::HashMap;
 
+/// Sink 发送错误
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendError {
+    /// 通道已满
+    ChannelFull,
+    /// 通道已断开
+    Disconnected,
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ChannelFull => write!(f, "sink channel full"),
+            Self::Disconnected => write!(f, "sink channel disconnected"),
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
+
 /// 数据回传接口
 ///
 /// 计算结果通过此接口发送给上游程序。
@@ -15,7 +35,7 @@ pub trait DataSink: Send {
     /// 发送计算结果
     ///
     /// `data` 为 item_name → value 的映射，只包含本轮计算有值的项（稀疏结构）。
-    fn send(&self, data: HashMap<String, f64>);
+    fn send(&self, data: HashMap<String, f64>) -> Result<(), SendError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -37,9 +57,12 @@ impl ChannelSink {
 }
 
 impl DataSink for ChannelSink {
-    fn send(&self, data: HashMap<String, f64>) {
+    fn send(&self, data: HashMap<String, f64>) -> Result<(), SendError> {
         // 非阻塞发送：如果通道满，丢弃本次数据
-        let _ = self.sender.try_send(data);
+        self.sender.try_send(data).map_err(|e| match e {
+            crossbeam_channel::TrySendError::Full(_) => SendError::ChannelFull,
+            crossbeam_channel::TrySendError::Disconnected(_) => SendError::Disconnected,
+        })
     }
 }
 
@@ -67,8 +90,9 @@ impl CallbackSink {
 }
 
 impl DataSink for CallbackSink {
-    fn send(&self, data: HashMap<String, f64>) {
+    fn send(&self, data: HashMap<String, f64>) -> Result<(), SendError> {
         (self.callback)(data);
+        Ok(())
     }
 }
 
@@ -80,8 +104,9 @@ impl DataSink for CallbackSink {
 pub struct NullSink;
 
 impl DataSink for NullSink {
-    fn send(&self, _data: HashMap<String, f64>) {
+    fn send(&self, _data: HashMap<String, f64>) -> Result<(), SendError> {
         // 丢弃
+        Ok(())
     }
 }
 
@@ -98,7 +123,7 @@ mod tests {
 
         let mut data = HashMap::new();
         data.insert("speed_mps".to_string(), 27.78);
-        sink.send(data);
+        sink.send(data).unwrap();
 
         let received = rx.try_recv().unwrap();
         assert_eq!(received.get("speed_mps"), Some(&27.78));
@@ -115,9 +140,9 @@ mod tests {
         data2.insert("b".to_string(), 2.0);
 
         // Fill channel (capacity 1)
-        sink.send(data1);
-        // This will fail silently (try_send returns Err)
-        sink.send(data2);
+        sink.send(data1).unwrap();
+        // This will fail because channel is full
+        assert_eq!(sink.send(data2), Err(SendError::ChannelFull));
 
         // Only first should be received
         let received = rx.try_recv().unwrap();
@@ -136,7 +161,7 @@ mod tests {
 
         let mut data = HashMap::new();
         data.insert("test".to_string(), 42.0);
-        sink.send(data);
+        sink.send(data).unwrap();
 
         let guard = received.lock().unwrap();
         assert_eq!(guard.get("test"), Some(&42.0));
@@ -146,7 +171,7 @@ mod tests {
     fn test_null_sink_does_not_panic() {
         let mut data = HashMap::new();
         data.insert("any".to_string(), 1.0);
-        NullSink.send(data);
+        NullSink.send(data).unwrap();
         // Just verifying no panic
     }
 }
