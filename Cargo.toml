@@ -13,3 +13,4 @@ path = "src/bin/acc-live-telemetry.rs"
 
 [dependencies]
 crossbeam-channel = "0.5"
+ctrlc = "3.4"

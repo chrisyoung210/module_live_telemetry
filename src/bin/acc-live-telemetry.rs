@@ -84,17 +84,18 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
 
     // Setup dashboard if requested
     let mut dashboard_distributor: Option<TelemetryDistributor> = None;
-    let _dashboard_handle = if dashboard {
+    let mut dashboard_dead = false;
+    let dashboard_handle: Option<std::thread::JoinHandle<()>> = if dashboard {
         let mut reg = ComputeRegistry::new();
         reg.register_realtime(Box::new(SpeedMps));
 
-        let mut dist = TelemetryDistributor::new(64);
+        let mut dist = TelemetryDistributor::new(1);
         let dash_rx = dist.add_consumer();
 
         let (sink_tx, sink_rx) = bounded::<std::collections::HashMap<String, f64>>(64);
         let sink = ChannelSink::new(sink_tx);
         let mut dash_svc = DashboardService::new(reg, Box::new(sink));
-        dash_svc.subscribe("speed_mps".into(), Duration::from_millis(dashboard_interval_ms), None);
+        dash_svc.subscribe("speed_mps".into(), Duration::from_millis(dashboard_interval_ms), None).unwrap();
 
         // Start output thread to print dashboard data as simple text
         std::thread::spawn(move || {
@@ -213,13 +214,14 @@ println!("connected to ACC shared memory");
                 .min(u64::MAX as u128) as u64;
             match active_reader.read_telemetry_frame(sample_tick, timestamp_ns) {
                 Ok(Some(frame)) => {
+                    let frame_arc = std::sync::Arc::new(frame);
                     // Distribute to dashboard (if active)
                     if let Some(ref dist) = dashboard_distributor {
-                        dist.distribute(frame.clone());
+                        dist.distribute(std::sync::Arc::clone(&frame_arc));
                     }
                     // Write to file (if active)
                     if let Some(active_writer) = writer.as_mut() {
-                        active_writer.write_frame(frame)?;
+                        active_writer.write_frame(&frame_arc)?;
                     }
                     sample_tick = sample_tick.saturating_add(1);
                 }
@@ -268,6 +270,17 @@ println!("connected to ACC shared memory");
             if last_flush.elapsed() >= interval {
                 active_writer.flush_to_disk()?;
                 last_flush = Instant::now();
+            }
+        }
+
+        // Periodically check if dashboard thread has died
+        if !dashboard_dead {
+            if let Some(ref handle) = dashboard_handle {
+                if handle.is_finished() {
+                    eprintln!("dashboard thread stopped unexpectedly; disabling dashboard distribution");
+                    dashboard_distributor = None;
+                    dashboard_dead = true;
+                }
             }
         }
 
@@ -806,7 +819,7 @@ fn parse_raw_command(args: &[String]) -> TelemetryResult<()> {
                 let phys = &buf[16..16+phys_sz];
                 let graph = &buf[16+phys_sz..16+phys_sz+graph_sz];
                 let frame = parse_raw_frame(tick, ns, phys, graph)?;
-                writer.write_frame(frame)?;
+                writer.write_frame(&frame)?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e.into()),
@@ -1221,6 +1234,8 @@ fn utf16_trim(arr: &[u16]) -> String {
 }
 
 fn serve_command(args: &[String]) -> TelemetryResult<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     let poll_hz = optional_f64(args, "--poll-hz", 120.0)?;
     let interval_ms = optional_u64(args, "--interval-ms", 50)?;
     let poll_interval = Duration::from_secs_f64(1.0 / poll_hz.max(1.0));
@@ -1237,7 +1252,7 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
     let (sink_tx, sink_rx) = bounded::<std::collections::HashMap<String, f64>>(64);
     let sink = ChannelSink::new(sink_tx);
     let mut dashboard = DashboardService::new(registry, Box::new(sink));
-    dashboard.subscribe("speed_mps".into(), Duration::from_millis(interval_ms), None);
+    dashboard.subscribe("speed_mps".into(), Duration::from_millis(interval_ms), None).unwrap();
 
     // Start output thread to print dashboard data as simple text
     std::thread::spawn(move || {
@@ -1252,7 +1267,14 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
         }
     });
 
-    let _handle = spawn_dashboard(dashboard, dashboard_rx);
+    let dashboard_handle = spawn_dashboard(dashboard, dashboard_rx);
+
+    // Graceful shutdown on Ctrl+C
+    let running = std::sync::Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    }).expect("failed to set Ctrl+C handler");
 
     println!("serve: polling at {poll_hz} Hz, dashboard interval {interval_ms} ms");
     println!("waiting for ACC shared memory...");
@@ -1262,7 +1284,7 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
     let mut started_at = Instant::now();
     let mut sample_tick = 0u64;
 
-    loop {
+    while running.load(Ordering::SeqCst) {
         let tick_start = Instant::now();
 
         if reader.is_none() {
@@ -1293,7 +1315,7 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
         let timestamp_ns = started_at.elapsed().as_nanos().min(u64::MAX as u128) as u64;
         match active_reader.read_telemetry_frame(sample_tick, timestamp_ns) {
             Ok(Some(frame)) => {
-                distributor.distribute(frame);
+                distributor.distribute(std::sync::Arc::new(frame));
                 sample_tick = sample_tick.saturating_add(1);
             }
             Ok(None) => {}
@@ -1305,6 +1327,13 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
 
         sleep_remaining(tick_start, poll_interval);
     }
+
+    // Graceful shutdown: drop distributor so dashboard receiver disconnects naturally
+    println!("shutting down...");
+    drop(distributor);
+    let _ = dashboard_handle.join();
+    println!("serve stopped.");
+    Ok(())
 }
 
 fn print_usage() {

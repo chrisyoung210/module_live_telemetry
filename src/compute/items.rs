@@ -121,8 +121,16 @@ impl RealtimeComputeItem for DeltaToBestLap {
         }
 
         // 在参考圈中查找对应位置
+        // 算法：在参考圈中线性扫描，找到 normalized_car_position 落在
+        // [reference[i], reference[i+1]) 内的第一个位置 i。
+        // 如果同一圈内车辆倒车或位置回退，则从头重新匹配，避免沿用过高的参考索引。
+        if self.index < reference.len()
+            && current_pos < reference[self.index].session.normalized_car_position
+        {
+            self.index = 0;
+        }
+
         for i in self.index..reference.len() {
-            let _ref_pos = reference[i].session.normalized_car_position;
             let ref_time = reference[i].timing.i_current_time as f64;
 
             if i == reference.len() - 1
@@ -244,6 +252,39 @@ mod tests {
         );
         let result = item.compute(&ctx2).unwrap();
         assert_eq!(result, -5000.0);
+        assert_eq!(item.index, 0);
+    }
+
+    #[test]
+    fn test_delta_to_best_lap_resets_index_on_position_backtrack() {
+        let reference = vec![
+            make_frame(200.0, 1, 0.0, 0),
+            make_frame(200.0, 1, 0.5, 50000),
+            make_frame(200.0, 1, 1.0, 100000),
+        ];
+        let values = HashMap::new();
+        let mut item = DeltaToBestLap::new();
+
+        let frame1 = make_frame(200.0, 1, 0.8, 75000);
+        let ctx1 = ComputeContext::with_reference(
+            &frame1, &values, &reference,
+            super::super::context::ReferenceSource {
+                file_path: std::path::PathBuf::from("test.acctlm"), lap_number: 1,
+            },
+        );
+        let _ = item.compute(&ctx1).unwrap();
+        assert_eq!(item.index, 1);
+
+        let frame2 = make_frame(200.0, 1, 0.4, 40000);
+        let ctx2 = ComputeContext::with_reference(
+            &frame2, &values, &reference,
+            super::super::context::ReferenceSource {
+                file_path: std::path::PathBuf::from("test.acctlm"), lap_number: 1,
+            },
+        );
+        let result = item.compute(&ctx2).unwrap();
+
+        assert_eq!(result, -40000.0);
         assert_eq!(item.index, 0);
     }
 

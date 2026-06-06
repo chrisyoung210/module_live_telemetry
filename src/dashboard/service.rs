@@ -2,7 +2,7 @@
 //!
 //! 管理计算项订阅、按频率调度计算、聚合结果并通过 DataSink 回传。
 
-use crate::compute::ComputeRegistry;
+use crate::compute::{ComputeError, ComputeRegistry};
 use crate::compute::context::ReferenceSource;
 use crate::dashboard::sink::DataSink;
 use crate::TelemetryFrame;
@@ -59,7 +59,7 @@ impl DashboardService {
 
     /// 订阅计算项
     ///
-    /// `item_name` 必须已在 ComputeRegistry 中注册。
+    /// `item_name` 必须已在 ComputeRegistry 中注册，否则返回 `ComputeError::ItemNotFound`。
     /// `interval` 指定该 item 的计算频率。
     /// `reference_source` 为动态计算项提供参考圈数据来源（静态计算项可传 `None`）。
     pub fn subscribe(
@@ -67,12 +67,16 @@ impl DashboardService {
         item_name: String,
         interval: Duration,
         reference_source: Option<ReferenceSource>,
-    ) {
+    ) -> crate::compute::ComputeResult<()> {
+        if !self.registry.is_registered(&item_name) {
+            return Err(ComputeError::ItemNotFound(item_name));
+        }
         self.subscriptions.insert(item_name.clone(), interval);
         self.next_schedule
             .insert(item_name.clone(), Instant::now() + interval);
         self.reference_sources
             .insert(item_name, reference_source);
+        Ok(())
     }
 
     /// 取消订阅
@@ -154,15 +158,16 @@ impl DashboardService {
                 match self.registry.compute_realtime(name, &request) {
                     Ok(value) => {
                         sparse_result.insert(name.clone(), value);
+                        // 基于上一次计划时间推进，避免帧处理耗时导致的累积漂移
+                        if let Some(interval) = self.subscriptions.get(name) {
+                            let prev = self.next_schedule.get(name).copied().unwrap_or(now);
+                            self.next_schedule.insert(name.clone(), prev + *interval);
+                        }
                     }
                     Err(err) => {
                         eprintln!("dashboard: compute item '{name}' failed: {err}");
+                        // 失败时不推进 schedule，下次帧到达时立即重试
                     }
-                }
-
-                // 更新下次计算时间
-                if let Some(interval) = self.subscriptions.get(name) {
-                    self.next_schedule.insert(name.clone(), now + *interval);
                 }
             }
 
@@ -229,12 +234,23 @@ mod tests {
 
         assert_eq!(service.subscription_count(), 0);
 
-        service.subscribe("speed_mps".into(), Duration::from_millis(100), None);
+        service.subscribe("speed_mps".into(), Duration::from_millis(100), None).unwrap();
         assert!(service.is_subscribed("speed_mps"));
         assert_eq!(service.subscription_count(), 1);
 
         service.unsubscribe("speed_mps");
         assert!(!service.is_subscribed("speed_mps"));
+        assert_eq!(service.subscription_count(), 0);
+    }
+
+    #[test]
+    fn test_subscribe_unknown_item_returns_error() {
+        let reg = ComputeRegistry::new();
+        let (tx, _rx) = bounded::<HashMap<String, f64>>(10);
+        let mut service = DashboardService::new(reg, Box::new(ChannelSink::new(tx)));
+
+        let result = service.subscribe("nonexistent".into(), Duration::from_millis(100), None);
+        assert!(result.is_err());
         assert_eq!(service.subscription_count(), 0);
     }
 
@@ -266,7 +282,7 @@ mod tests {
             DashboardService::new(reg, Box::new(ChannelSink::new(data_tx)));
 
         // Subscribe with a very short interval so it triggers on the first frame
-        service.subscribe("speed_mps".into(), Duration::from_nanos(1), None);
+        service.subscribe("speed_mps".into(), Duration::from_nanos(1), None).unwrap();
 
         // Send a frame
         frame_tx.send(Arc::new(make_frame(100.0))).unwrap();

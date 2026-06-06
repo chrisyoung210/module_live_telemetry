@@ -240,7 +240,7 @@ fn roundtrip_all_clusters(n: usize, chunk_rows: usize) {
 
     for i in 0..n {
         let frame = make_frame(i as u64);
-        writer.write_frame(frame).unwrap();
+        writer.write_frame(&frame).unwrap();
     }
 
     let (cursor, summary) = writer.finish().unwrap();

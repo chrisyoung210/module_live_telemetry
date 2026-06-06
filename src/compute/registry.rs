@@ -10,6 +10,9 @@ use crate::TelemetryFrame;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// 参考圈缓存最大条目数
+const MAX_CACHE_ENTRIES: usize = 4;
+
 /// 计算项注册中心
 ///
 /// 按注册顺序管理实时计算项（RealtimeComputeItem）和批量计算项（BatchComputeItem）。
@@ -106,6 +109,15 @@ impl ComputeRegistry {
 
         let frames = load_reference_lap_from_file(source)?;
         let arc = Arc::new(frames);
+
+        // Evict if full before inserting
+        if self.reference_cache.len() >= MAX_CACHE_ENTRIES
+            && !self.reference_cache.contains_key(source)
+        {
+            if let Some(key) = self.reference_cache.keys().next().cloned() {
+                self.reference_cache.remove(&key);
+            }
+        }
         self.reference_cache.insert(source.clone(), Arc::clone(&arc));
         Ok(arc)
     }
@@ -127,7 +139,17 @@ impl ComputeRegistry {
     }
 
     /// 缓存参考圈数据
+    ///
+    /// 如果缓存已满（max `MAX_CACHE_ENTRIES`），淘汰一个已有条目后插入新数据。
     pub fn cache_reference_lap(&mut self, source: ReferenceSource, frames: Vec<TelemetryFrame>) {
+        if self.reference_cache.len() >= MAX_CACHE_ENTRIES
+            && !self.reference_cache.contains_key(&source)
+        {
+            // 淘汰一个已有条目（HashMap 无序，任意选择一个）
+            if let Some(key) = self.reference_cache.keys().next().cloned() {
+                self.reference_cache.remove(&key);
+            }
+        }
         self.reference_cache.insert(source, Arc::new(frames));
     }
 

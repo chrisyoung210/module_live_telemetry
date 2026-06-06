@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 /// 遥测数据分发器
 ///
-/// 从单一数据源接收 `TelemetryFrame`，使用 `Arc` 包装后分发给所有已注册的消费者。
+/// 从单一数据源接收 `Arc<TelemetryFrame>`，零拷贝分发给所有已注册的消费者。
 /// 每个消费者通过独立的通道接收数据，互不干扰。
 ///
 /// # 使用示例
@@ -17,6 +17,7 @@ use std::sync::Arc;
 /// ```no_run
 /// use module_live_telemetry::compute::ComputeRegistry;
 /// use module_live_telemetry::distributor::TelemetryDistributor;
+/// use std::sync::Arc;
 ///
 /// let mut distributor = TelemetryDistributor::new(64);
 /// let recorder_rx = distributor.add_consumer();
@@ -24,7 +25,8 @@ use std::sync::Arc;
 ///
 /// // 在录制循环中：
 /// // let frame = reader.read_telemetry_frame(...)?;
-/// // distributor.distribute(frame);
+/// // let frame_arc = Arc::new(frame);
+/// // distributor.distribute(Arc::clone(&frame_arc));
 /// ```
 pub struct TelemetryDistributor {
     senders: Vec<Sender<Arc<TelemetryFrame>>>,
@@ -35,7 +37,8 @@ impl TelemetryDistributor {
     /// 创建新的分发器
     ///
     /// `capacity` 指定每个消费者通道的缓冲大小。
-    /// 如果消费者处理速度跟不上，旧帧将被丢弃。
+    /// 推荐 dashboard 消费者使用 capacity=1，以最小化旧帧排队。
+    /// 使用 non-blocking `try_send`——通道满时新帧被丢弃，旧帧保留在队列中。
     pub fn new(capacity: usize) -> Self {
         Self {
             senders: Vec::new(),
@@ -52,14 +55,13 @@ impl TelemetryDistributor {
 
     /// 分发遥测帧给所有消费者
     ///
-    /// 将 frame 包装为 `Arc`，克隆 Arc（零拷贝引用计数）发送给每个消费者。
+    /// 接收一个 `Arc<TelemetryFrame>`，克隆 Arc（零拷贝引用计数）发送给每个消费者。
+    /// 调用方应在传入前创建 Arc，以便在录制和 dashboard 路径之间共享同一份数据。
     /// 使用 `try_send` 避免阻塞——如果消费者通道已满，该帧对该消费者被丢弃。
-    pub fn distribute(&self, frame: TelemetryFrame) {
-        let arc = Arc::new(frame);
-
+    pub fn distribute(&self, frame: Arc<TelemetryFrame>) {
         for sender in &self.senders {
-            // try_send: 非阻塞发送，消费者满时丢弃帧
-            let _ = sender.try_send(Arc::clone(&arc));
+            // try_send: 非阻塞发送，消费者满时丢弃新帧
+            let _ = sender.try_send(Arc::clone(&frame));
         }
     }
 
@@ -98,8 +100,8 @@ mod tests {
         let mut distributor = TelemetryDistributor::new(10);
         let rx = distributor.add_consumer();
 
-        distributor.distribute(make_frame(1));
-        distributor.distribute(make_frame(2));
+        distributor.distribute(Arc::new(make_frame(1)));
+        distributor.distribute(Arc::new(make_frame(2)));
 
         let f1 = rx.try_recv().unwrap();
         let f2 = rx.try_recv().unwrap();
@@ -114,7 +116,7 @@ mod tests {
         let rx1 = distributor.add_consumer();
         let rx2 = distributor.add_consumer();
 
-        distributor.distribute(make_frame(42));
+        distributor.distribute(Arc::new(make_frame(42)));
 
         let f1 = rx1.try_recv().unwrap();
         let f2 = rx2.try_recv().unwrap();
@@ -129,7 +131,7 @@ mod tests {
         let rx1 = distributor.add_consumer();
         let rx2 = distributor.add_consumer();
 
-        distributor.distribute(make_frame(100));
+        distributor.distribute(Arc::new(make_frame(100)));
 
         let f1 = rx1.try_recv().unwrap();
 
@@ -141,24 +143,20 @@ mod tests {
     }
 
     #[test]
-    fn test_overflow_drops_old() {
+    fn test_overflow_drops_new() {
         let mut distributor = TelemetryDistributor::new(2);
         let rx = distributor.add_consumer();
 
         // Don't recv — fill channel to capacity
-        distributor.distribute(make_frame(1));
-        distributor.distribute(make_frame(2));
-        // This should be dropped (channel full)
-        distributor.distribute(make_frame(3));
+        distributor.distribute(Arc::new(make_frame(1)));
+        distributor.distribute(Arc::new(make_frame(2)));
+        // This new frame should be dropped (try_send on full channel)
+        distributor.distribute(Arc::new(make_frame(3)));
 
-        // Should receive frames 2 and 3 (1 was dropped)
+        // Should receive frames 1 and 2 (frame 3 was dropped)
         let f1 = rx.try_recv().unwrap();
         let f2 = rx.try_recv().unwrap();
 
-        // Due to bounded channel behavior, the first might be 2 or 3
-        // depending on whether try_send succeeds or fails at the dropping point
-        // Crossbeam try_send returns Err when full, so frame 3 is dropped
-        // and we get 1 and 2
         assert_eq!(f1.sample_tick, 1);
         assert_eq!(f2.sample_tick, 2);
         // Frame 3 was never sent (try_send returned Err)

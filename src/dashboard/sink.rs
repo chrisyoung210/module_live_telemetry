@@ -91,8 +91,23 @@ impl CallbackSink {
 
 impl DataSink for CallbackSink {
     fn send(&self, data: HashMap<String, f64>) -> Result<(), SendError> {
-        (self.callback)(data);
-        Ok(())
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (self.callback)(data);
+        }));
+        match result {
+            Ok(()) => Ok(()),
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else {
+                    "unknown panic".to_string()
+                };
+                eprintln!("CallbackSink: callback panicked: {msg}");
+                Ok(())
+            }
+        }
     }
 }
 

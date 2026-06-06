@@ -65,9 +65,9 @@ impl<W: Write + Seek> BinaryTelemetryWriter<W> {
         writer.seek(SeekFrom::Start(header.first_chunk_offset))?;
         Ok(Self { writer, header, config, frames: Vec::with_capacity(metadata.chunk_rows), index_entries: Vec::new(), total_frames: 0, next_chunk_seq: 0, finished: false })
     }
-    pub fn write_frame(&mut self, frame: TelemetryFrame) -> TelemetryResult<()> {
+    pub fn write_frame(&mut self, frame: &TelemetryFrame) -> TelemetryResult<()> {
         if self.finished { return Err(TelemetryError::InvalidArgument("cannot write after finish".into())); }
-        self.frames.push(frame);
+        self.frames.push(frame.clone());
         self.total_frames = self.total_frames.saturating_add(1);
         if self.frames.len() >= self.config.chunk_rows { self.flush_all_clusters()?; }
         Ok(())
