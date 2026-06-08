@@ -147,6 +147,40 @@ pub fn create_sector_best_items() -> (SectorBestItem, SectorBestItem, SectorBest
 }
 
 // ---------------------------------------------------------------------------
+// Skeleton RealtimeComputeItem impls (RED phase — stub, no real logic)
+// ---------------------------------------------------------------------------
+
+impl RealtimeComputeItem for PrevSectorTimeItem {
+    fn name(&self) -> &str {
+        unimplemented!()
+    }
+
+    fn compute(&mut self, _ctx: &ComputeContext) -> ComputeResult<f64> {
+        unimplemented!()
+    }
+}
+
+impl RealtimeComputeItem for PrevSectorNumberItem {
+    fn name(&self) -> &str {
+        unimplemented!()
+    }
+
+    fn compute(&mut self, _ctx: &ComputeContext) -> ComputeResult<f64> {
+        unimplemented!()
+    }
+}
+
+impl RealtimeComputeItem for SectorBestItem {
+    fn name(&self) -> &str {
+        unimplemented!()
+    }
+
+    fn compute(&mut self, _ctx: &ComputeContext) -> ComputeResult<f64> {
+        unimplemented!()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Built-in: DeltaTimeToLifeBestLap
 // ---------------------------------------------------------------------------
 
@@ -351,6 +385,36 @@ mod tests {
         }
     }
 
+    fn make_sector_frame(
+        sector_index: i32,
+        is_valid_lap: i32,
+        last_sector_time: i32,
+        completed_laps: i32,
+    ) -> TelemetryFrame {
+        TelemetryFrame {
+            sample_tick: 0,
+            timestamp_ns: 0,
+            controls: ControlSample::default(),
+            motion: MotionSample::default(),
+            tyres: TyreSample::default(),
+            powertrain: PowertrainSample::default(),
+            session: SessionSample {
+                current_sector_index: sector_index,
+                is_valid_lap,
+                completed_laps,
+                normalized_car_position: sector_index as f32 / 3.0,
+                ..SessionSample::default()
+            },
+            timing: TimingSample {
+                last_sector_time,
+                ..TimingSample::default()
+            },
+            car_state: CarStateSample::default(),
+            environment: EnvironmentSample::default(),
+            other_cars: OtherCarsSample::default(),
+        }
+    }
+
     #[test]
     fn test_delta_time_to_life_best_lap_normal() {
         let reference = vec![
@@ -483,5 +547,229 @@ mod tests {
         // Verify s1 and s2 see the same locked state (same Arc)
         let _ = s1;
         let _ = s2;
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 2: PrevSectorTimeItem tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_prev_sector_time_initial_returns_minus_one() {
+        // First frame: current_sector_index=0, no transition yet → -1.0
+        let (mut time_item, _) = create_prev_sector_items();
+        let frame = make_sector_frame(0, 1, 12345, 1);
+        let values = HashMap::new();
+        let ctx = ComputeContext::new(&frame, &values);
+        let result = time_item.compute(&ctx).unwrap();
+        assert!((result - (-1.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_prev_sector_time_valid_lap_with_transition() {
+        // Frame1: sector 0, no transition → -1.0
+        // Frame2: sector 1 (transition 0→1), valid lap → last_sector_time
+        let (mut time_item, _) = create_prev_sector_items();
+        let values = HashMap::new();
+
+        let f1 = make_sector_frame(0, 1, 10000, 1);
+        let ctx1 = ComputeContext::new(&f1, &values);
+        let r1 = time_item.compute(&ctx1).unwrap();
+        assert!((r1 - (-1.0)).abs() < 0.01);
+
+        let f2 = make_sector_frame(1, 1, 30456, 1);
+        let ctx2 = ComputeContext::new(&f2, &values);
+        let r2 = time_item.compute(&ctx2).unwrap();
+        assert!((r2 - 30456.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_prev_sector_time_invalid_lap_returns_minus_one() {
+        let (mut time_item, _) = create_prev_sector_items();
+        let values = HashMap::new();
+
+        let f1 = make_sector_frame(0, 0, 10000, 1);
+        let ctx1 = ComputeContext::new(&f1, &values);
+        time_item.compute(&ctx1).unwrap(); // establish baseline
+
+        let f2 = make_sector_frame(1, 0, 30456, 1); // is_valid_lap=0
+        let ctx2 = ComputeContext::new(&f2, &values);
+        let r2 = time_item.compute(&ctx2).unwrap();
+        assert!((r2 - (-1.0)).abs() < 0.01); // invalid lap → -1.0
+    }
+
+    #[test]
+    fn test_prev_sector_time_multiple_transitions() {
+        let (mut time_item, _) = create_prev_sector_items();
+        let values = HashMap::new();
+
+        // 0→1
+        let f1 = make_sector_frame(0, 1, 0, 1);
+        time_item.compute(&ComputeContext::new(&f1, &values)).unwrap();
+        let f2 = make_sector_frame(1, 1, 25000, 1);
+        let r2 = time_item.compute(&ComputeContext::new(&f2, &values)).unwrap();
+        assert!((r2 - 25000.0).abs() < 0.01);
+
+        // 1→2
+        let f3 = make_sector_frame(2, 1, 30000, 1);
+        let r3 = time_item.compute(&ComputeContext::new(&f3, &values)).unwrap();
+        assert!((r3 - 30000.0).abs() < 0.01);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 2: PrevSectorNumberItem tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_prev_sector_number_initial_returns_minus_one() {
+        let (_, mut num_item) = create_prev_sector_items();
+        let frame = make_sector_frame(0, 1, 0, 1);
+        let values = HashMap::new();
+        let ctx = ComputeContext::new(&frame, &values);
+        let result = num_item.compute(&ctx).unwrap();
+        assert!((result - (-1.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_prev_sector_number_after_transition() {
+        let (mut time_item, mut num_item) = create_prev_sector_items();
+        let values = HashMap::new();
+
+        let f1 = make_sector_frame(0, 1, 0, 1);
+        time_item.compute(&ComputeContext::new(&f1, &values)).unwrap();
+        num_item.compute(&ComputeContext::new(&f1, &values)).unwrap();
+
+        // Transition 0→1: previous sector was 0
+        let f2 = make_sector_frame(1, 1, 25000, 1);
+        time_item.compute(&ComputeContext::new(&f2, &values)).unwrap();
+        let num_r2 = num_item.compute(&ComputeContext::new(&f2, &values)).unwrap();
+        assert!((num_r2 - 0.0).abs() < 0.01); // sector 0 just completed
+    }
+
+    #[test]
+    fn test_prev_sector_number_sync_with_time() {
+        let (mut time_item, mut num_item) = create_prev_sector_items();
+        let values = HashMap::new();
+
+        // Transition 0→1
+        let f1 = make_sector_frame(0, 1, 0, 1);
+        time_item.compute(&ComputeContext::new(&f1, &values)).unwrap();
+        num_item.compute(&ComputeContext::new(&f1, &values)).unwrap();
+
+        let f2 = make_sector_frame(1, 1, 30456, 1);
+        let time_r = time_item.compute(&ComputeContext::new(&f2, &values)).unwrap();
+        let num_r = num_item.compute(&ComputeContext::new(&f2, &values)).unwrap();
+        assert!((time_r - 30456.0).abs() < 0.01);
+        assert!((num_r - 0.0).abs() < 0.01);
+
+        // Transition 1→2
+        let f3 = make_sector_frame(2, 1, 18000, 1);
+        let time_r3 = time_item.compute(&ComputeContext::new(&f3, &values)).unwrap();
+        let num_r3 = num_item.compute(&ComputeContext::new(&f3, &values)).unwrap();
+        assert!((time_r3 - 18000.0).abs() < 0.01);
+        assert!((num_r3 - 1.0).abs() < 0.01);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 2: SectorBestItem tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_sector_best_initial_all_minus_one() {
+        let (s0, s1, s2) = create_sector_best_items();
+        let values = HashMap::new();
+        let frame = make_sector_frame(0, 1, 0, 1);
+        let ctx = ComputeContext::new(&frame, &values);
+
+        let mut s0 = s0;
+        let mut s1 = s1;
+        let mut s2 = s2;
+        assert!((s0.compute(&ctx).unwrap() - (-1.0)).abs() < 0.01);
+        assert!((s1.compute(&ctx).unwrap() - (-1.0)).abs() < 0.01);
+        assert!((s2.compute(&ctx).unwrap() - (-1.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_sector_best_updates_on_valid_transition() {
+        let (mut s0, mut s1, _s2) = create_sector_best_items();
+        let values = HashMap::new();
+
+        // Frame 1: sector 0, no transition
+        let f1 = make_sector_frame(0, 1, 30000, 1);
+        let ctx1 = ComputeContext::new(&f1, &values);
+        s0.compute(&ctx1).unwrap();
+        s1.compute(&ctx1).unwrap();
+
+        // Frame 2: sector 1 (transition 0→1), valid lap
+        let f2 = make_sector_frame(1, 1, 25000, 1);
+        let ctx2 = ComputeContext::new(&f2, &values);
+        let r0 = s0.compute(&ctx2).unwrap();
+        let r1 = s1.compute(&ctx2).unwrap();
+
+        // sector_best_1 (index 0) should now have best_times[0] = 25000
+        assert!((r0 - 25000.0).abs() < 0.01);
+        // sector_best_2 (index 1) still -1.0 (sector 1 not yet completed)
+        assert!((r1 - (-1.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_sector_best_ignores_invalid_lap() {
+        let (mut s0, _, _) = create_sector_best_items();
+        let values = HashMap::new();
+
+        let f1 = make_sector_frame(0, 0, 30000, 1);
+        s0.compute(&ComputeContext::new(&f1, &values)).unwrap();
+
+        // Transition 0→1 with invalid lap
+        let f2 = make_sector_frame(1, 0, 25000, 1);
+        let r = s0.compute(&ComputeContext::new(&f2, &values)).unwrap();
+        // best_times[0] should NOT have updated → still -1.0
+        assert!((r - (-1.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_sector_best_keeps_best_time() {
+        let (mut s0, _, _) = create_sector_best_items();
+        let values = HashMap::new();
+
+        // First lap: sector 0→1, time=25000 (best so far)
+        let f1 = make_sector_frame(0, 1, 0, 1);
+        s0.compute(&ComputeContext::new(&f1, &values)).unwrap();
+        let f2 = make_sector_frame(1, 1, 25000, 1);
+        s0.compute(&ComputeContext::new(&f2, &values)).unwrap();
+
+        // Second lap: sector 0→1, time=35000 (slower)
+        let f3 = make_sector_frame(0, 1, 0, 2);
+        s0.compute(&ComputeContext::new(&f3, &values)).unwrap();
+        let f4 = make_sector_frame(1, 1, 35000, 2);
+        let r = s0.compute(&ComputeContext::new(&f4, &values)).unwrap();
+        // Should still be 25000 (best preserved)
+        assert!((r - 25000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_sector_best_multiple_laps() {
+        let (mut s0, _, _) = create_sector_best_items();
+        let values = HashMap::new();
+
+        // Lap 1: sector 0→1, sector_time=30000
+        let f1 = make_sector_frame(0, 1, 0, 1);
+        s0.compute(&ComputeContext::new(&f1, &values)).unwrap();
+        let f2 = make_sector_frame(1, 1, 30000, 1);
+        let r1 = s0.compute(&ComputeContext::new(&f2, &values)).unwrap();
+        assert!((r1 - 30000.0).abs() < 0.01);
+
+        // Lap 2: sector 0→1, sector_time=20000 (better!)
+        let f3 = make_sector_frame(0, 1, 0, 2);
+        s0.compute(&ComputeContext::new(&f3, &values)).unwrap();
+        let f4 = make_sector_frame(1, 1, 20000, 2);
+        let r2 = s0.compute(&ComputeContext::new(&f4, &values)).unwrap();
+        assert!((r2 - 20000.0).abs() < 0.01);
+
+        // Lap 3: sector 0→1, sector_time=25000 (worse, keep 20000)
+        let f5 = make_sector_frame(0, 1, 0, 3);
+        s0.compute(&ComputeContext::new(&f5, &values)).unwrap();
+        let f6 = make_sector_frame(1, 1, 25000, 3);
+        let r3 = s0.compute(&ComputeContext::new(&f6, &values)).unwrap();
+        assert!((r3 - 20000.0).abs() < 0.01);
     }
 }
