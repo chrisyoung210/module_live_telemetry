@@ -1,11 +1,13 @@
 ﻿use module_live_telemetry::{
     parse_raw_frame, shmem::AccGameStatus, shmem::AccSharedMemoryReader,
     BinaryTelemetryReader, BinaryTelemetryWriter, ControlSample,
-    LapIndexEntry, LiveTelemetryConfig, SessionMetadata, SPageFileStatic,
+    LiveTelemetryConfig, SessionMetadata, SPageFileStatic,
     TelemetryError, TelemetryResult, TimingSample,
-    compute::{ComputeRegistry, items::SpeedMps},
-    dashboard::{spawn_dashboard, sink::ChannelSink, service::DashboardService},
+    compute::{ComputeRegistry, context::ReferenceSource, items::DeltaTimeToLifeBestLap},
+    dashboard::{spawn_dashboard, sink::ChannelSink, service::DashboardService, service::DashboardCommand},
     distributor::TelemetryDistributor,
+    item_key::ItemKey,
+    recording::{aggregate_laps, append_lap_index},
 };
 use crossbeam_channel::bounded;
 use std::env;
@@ -32,6 +34,7 @@ fn run() -> TelemetryResult<()> {
     match command.as_str() {
         "record" => record_command(&args),
         "record-raw" => record_raw_command(&args),
+        "record-all" => record_all_command(&args),
         "inspect" => inspect_command(&args),
         "export" => export_command(&args),
         "laps" => laps_command(&args),
@@ -58,7 +61,9 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
     let status_interval_ms = optional_u64(args, "--status-interval-ms", 2000)?;
     let flush_interval_ms = optional_u64(args, "--flush-interval-ms", 2000)?;
     let dashboard = args.iter().any(|a| a == "--dashboard");
-    let dashboard_interval_ms = optional_u64(args, "--dashboard-interval-ms", 50)?;
+    let _dashboard_interval_ms = optional_u64(args, "--dashboard-interval-ms", 50)?;
+    let ref_lap_path = optional_path(args, "--ref-lap");
+    let ref_lap_number = optional_i32(args, "--ref-lap-number", 1)?;
     let poll_interval = Duration::from_secs_f64(1.0 / poll_hz.max(1.0));
     let status_interval = Duration::from_millis(status_interval_ms.max(250));
     let flush_interval = if flush_interval_ms == 0 {
@@ -86,8 +91,7 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
     let mut dashboard_distributor: Option<TelemetryDistributor> = None;
     let mut dashboard_dead = false;
     let dashboard_handle: Option<std::thread::JoinHandle<()>> = if dashboard {
-        let mut reg = ComputeRegistry::new();
-        reg.register_realtime(Box::new(SpeedMps));
+        let reg = ComputeRegistry::new();
 
         let mut dist = TelemetryDistributor::new(1);
         let dash_rx = dist.add_consumer();
@@ -95,7 +99,24 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
         let (sink_tx, sink_rx) = bounded::<std::collections::HashMap<String, f64>>(64);
         let sink = ChannelSink::new(sink_tx);
         let mut dash_svc = DashboardService::new(reg, Box::new(sink));
-        dash_svc.subscribe("speed_mps".into(), Duration::from_millis(dashboard_interval_ms), None).unwrap();
+
+        // If reference lap is specified, register and subscribe DeltaTimeToLifeBestLap
+        if let Some(ref_path) = ref_lap_path {
+                    match dash_svc.registry_mut().register_calc_realtime(Box::new(DeltaTimeToLifeBestLap::new())) {
+                Ok(()) => {
+                    let key = ItemKey::parse("calc:delta_time_to_life_best_lap").unwrap();
+                    let ref_source = ReferenceSource {
+                        file_path: ref_path,
+                        lap_number: ref_lap_number,
+                    };
+                    dash_svc.subscribe(key, Duration::from_millis(100), Some(ref_source)).unwrap();
+                    println!("delta_time_to_life_best_lap: reference lap #{} loaded", ref_lap_number);
+                }
+                Err(e) => {
+                    eprintln!("warning: failed to register delta_time_to_life_best_lap: {e}");
+                }
+            }
+        }
 
         // Start output thread to print dashboard data as simple text
         std::thread::spawn(move || {
@@ -110,7 +131,8 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
             }
         });
 
-        let handle = spawn_dashboard(dash_svc, dash_rx);
+        let (_dash_cmd_tx, dash_cmd_rx) = bounded::<DashboardCommand>(1);
+        let handle = spawn_dashboard(dash_svc, dash_rx, dash_cmd_rx);
         dashboard_distributor = Some(dist);
         Some(handle)
     } else {
@@ -439,6 +461,17 @@ fn optional_u64(args: &[String], flag: &str, default: u64) -> TelemetryResult<u6
     }
 }
 
+fn optional_i32(args: &[String], flag: &str, default: i32) -> TelemetryResult<i32> {
+    match args.iter().position(|a| a == flag) {
+        Some(i) => args
+            .get(i + 1)
+            .ok_or_else(|| TelemetryError::InvalidArgument(format!("missing value for {flag}")))?
+            .parse::<i32>()
+            .map_err(|e| TelemetryError::InvalidArgument(format!("invalid {flag}: {e}"))),
+        None => Ok(default),
+    }
+}
+
 fn laps_command(args: &[String]) -> TelemetryResult<()> {
     let input = required_path(args, "--input")?;
     let reader = BinaryTelemetryReader::open(&input)?;
@@ -452,188 +485,40 @@ fn laps_command(args: &[String]) -> TelemetryResult<()> {
     println!("total_samples: {}", summary.total_samples);
     println!();
 
-    // Read session samples to get lap boundaries
-    let session_samples = reader.read_all_session().unwrap_or_default();
-    let timing_samples = reader.read_all_timing().unwrap_or_default();
+    // Use shared aggregation logic (consistent with parse_acctlm_file)
+    let aggregated = aggregate_laps(&reader)?;
 
-    if session_samples.is_empty() && timing_samples.is_empty() {
+    if aggregated.is_empty() {
         println!("no session or timing data found in this file");
         return Ok(());
     }
 
-    // Aggregate lap data from session and timing samples.
-    // Detection strategy:
-    //   1. `current_sector_index` resetting (from 1+ to 0) indicates crossing start/finish line.
-    //   2. `completed_laps` incrementing also indicates a line crossing.
-    //   3. We merge these signals: a new lap starts when EITHER signal fires.
-    // This correctly separates the out lap from the first timed lap.
-    #[derive(Debug)]
-    struct LapInfo {
-        lap_number: i32,
-        start_tick: u64,
-        end_tick: u64,
-        sample_count: usize,
-        is_valid: bool,
-        is_out_lap: bool,
-        i_last_time_ms: Option<i32>,
-        i_best_time_ms: Option<i32>,
-    }
+    // Display
+    let format_lap_time = |ms: Option<i32>| -> String {
+        ms.filter(|&v| v > 0 && v < 2_000_000)
+            .map(|v| format!("{}:{:02}.{:03}", v / 60000, (v % 60000) / 1000, v % 1000))
+            .unwrap_or_else(|| "-".to_string())
+    };
 
-    if !session_samples.is_empty() {
-        // --- Lap boundary detection ---
-        //
-        // Use `normalized_car_position` (0.0鈥?.0, wraps at S/F line).
-        // When it drops from ~0.9+ to ~0.1- the car crossed start/finish.
+    println!("laps: {} total laps recorded", aggregated.len());
+    println!();
+    println!(
+        "{:<5} {:<5} {:<14} {:<14} {:<10} {:<8} {:<12} {:<12}",
+        "lap", "out?", "start_tick", "end_tick", "samples", "valid", "time", "best"
+    );
 
-        let mut crossings: Vec<usize> = Vec::new();
-        for i in 1..session_samples.len() {
-            let prev_pos = session_samples[i - 1].normalized_car_position;
-            let cur_pos = session_samples[i].normalized_car_position;
-            // Position wrapped from near 1.0 back to near 0.0 = lap boundary
-if prev_pos > 0.8 && cur_pos < 0.2 {
-                crossings.push(i);
-            }
-        }
-
-        // Build lap segments from crossings (normalized_car_position wraps)
-        let timing_ticks: Vec<u64> = timing_samples.iter().map(|t| t.sample_tick).collect();
-        let mut laps: Vec<LapInfo> = Vec::new();
-        let mut lap_start_idx: usize = 0;
-        let mut lap_number: i32 = 0;
-
-        for &cross_idx in &crossings {
-            let start_tick = session_samples[lap_start_idx].sample_tick;
-            let end_tick = session_samples[cross_idx - 1].sample_tick;
-            let sample_count = cross_idx - lap_start_idx;
-            let is_out_lap = lap_number == 0;
-            // With fixed struct, is_valid_lap is 0/1 flag throughout.
-            // normPos update lags 2-3 ticks behind iCurTime reset, so check
-            // the last 3 samples of the lap instead of just the last one.
-            let end = cross_idx.saturating_sub(1);
-            let start = end.saturating_sub(2).max(lap_start_idx);
-            let valid = !is_out_lap
-                && !session_samples[start..=end].iter().any(|s| s.is_valid_lap == 0);
-
-            // Find timing data for this lap: look for i_last_time at or near the crossing point
-            let (last_time_ms, best_time_ms) = if !timing_samples.is_empty() {
-                let timing_at_cross = timing_ticks
-                    .binary_search(&session_samples[cross_idx].sample_tick)
-                    .ok()
-                    .map(|idx| &timing_samples[idx])
-                    .or_else(|| {
-                        timing_samples
-                            .iter()
-                            .filter(|t| t.sample_tick >= start_tick && t.sample_tick <= session_samples[cross_idx].sample_tick)
-                            .max_by_key(|t| t.sample_tick)
-                    });
-                timing_at_cross
-                    .map(|t| {
-                        let last = if t.i_last_time > 0 && t.i_last_time < 2_000_000 { Some(t.i_last_time) } else { None };
-                        let best = if t.i_best_time > 0 && t.i_best_time < 2_000_000 { Some(t.i_best_time) } else { None };
-                        (last, best)
-                    })
-                    .unwrap_or((None, None))
-            } else {
-                (None, None)
-            };
-
-            laps.push(LapInfo {
-                lap_number,
-                start_tick,
-                end_tick,
-                sample_count,
-                is_valid: valid,
-                is_out_lap,
-                i_last_time_ms: last_time_ms,
-                i_best_time_ms: best_time_ms,
-            });
-            lap_start_idx = cross_idx;
-            lap_number += 1;
-        }
-
-// Push remaining samples as the last (possibly incomplete) lap
-        if lap_start_idx < session_samples.len() {
-            let last_idx = session_samples.len() - 1;
-            let start_tick = session_samples[lap_start_idx].sample_tick;
-            let end_tick = session_samples[last_idx].sample_tick;
-            let sample_count = last_idx - lap_start_idx + 1;
-            let is_out_lap = lap_number == 0;
-            // Last (incomplete) lap: check the final sample's flag
-            let end_3 = last_idx.saturating_sub(2).max(lap_start_idx);
-            let valid = !is_out_lap
-                && !session_samples[end_3..=last_idx].iter().any(|s| s.is_valid_lap == 0);
-
-            laps.push(LapInfo {
-                lap_number,
-                start_tick,
-                end_tick,
-                sample_count,
-                is_valid: valid,
-                is_out_lap,
-                i_last_time_ms: None,
-                i_best_time_ms: None,
-            });
-        }
-
-        // Display
-        let format_lap_time = |ms: Option<i32>| -> String {
-            ms.filter(|&v| v > 0 && v < 2_000_000)
-                .map(|v| format!("{}:{:02}.{:03}", v / 60000, (v % 60000) / 1000, v % 1000))
-                .unwrap_or_else(|| "-".to_string())
-        };
-
-        println!("laps: {} total laps recorded", laps.len());
-        println!();
+    for lap in &aggregated {
         println!(
             "{:<5} {:<5} {:<14} {:<14} {:<10} {:<8} {:<12} {:<12}",
-            "lap", "out?", "start_tick", "end_tick", "samples", "valid", "time", "best"
+            lap.lap_number,
+            if lap.is_out_lap { "yes" } else { "" },
+            lap.start_tick,
+            lap.end_tick,
+            lap.sample_count,
+            if lap.is_valid { "yes" } else { "no" },
+            format_lap_time(lap.last_time_ms),
+            format_lap_time(lap.best_time_ms),
         );
-
-        for lap in &laps {
-            println!(
-                "{:<5} {:<5} {:<14} {:<14} {:<10} {:<8} {:<12} {:<12}",
-                lap.lap_number,
-                if lap.is_out_lap { "yes" } else { "" },
-                lap.start_tick,
-                lap.end_tick,
-                lap.sample_count,
-                if lap.is_valid { "yes" } else { "no" },
-                format_lap_time(lap.i_last_time_ms),
-                format_lap_time(lap.i_best_time_ms),
-            );
-        }
-
-        // No session data; show timing summary instead
-    if timing_samples.is_empty() {
-            println!("no session data (lap boundaries); showing timing samples summary:");
-            println!("timing samples: {}", timing_samples.len());
-            if let Some(first) = timing_samples.first() {
-                println!("first sample tick: {}", first.sample_tick);
-            }
-            if let Some(last) = timing_samples.last() {
-                println!("last sample tick: {}", last.sample_tick);
-            }
-
-            // Show timing samples that have non-zero i_last_time (lap completions)
-            let laps_with_times: Vec<_> = timing_samples
-                .iter()
-                .filter(|t| t.i_last_time > 0)
-                .collect();
-            if !laps_with_times.is_empty() {
-                println!();
-                println!("samples with lap times (i_last_time > 0): {}", laps_with_times.len());
-                println!(
-                    "{:<14} {:<12} {:<12} {:<12}",
-                    "tick", "last_ms", "best_ms", "sector_ms"
-                );
-                for t in laps_with_times.iter().take(50) {
-                    println!(
-                        "{:<14} {:<12} {:<12} {:<12}",
-                        t.sample_tick, t.i_last_time, t.i_best_time, t.last_sector_time
-                    );
-                }
-            }
-        }
     }
 
     Ok(())
@@ -744,6 +629,215 @@ fn record_raw_command(args: &[String]) -> TelemetryResult<()> {
     }
 }
 
+fn record_all_command(args: &[String]) -> TelemetryResult<()> {
+    let out = optional_path(args, "--out");
+    let out_dir = optional_path(args, "--out-dir").unwrap_or_else(|| PathBuf::from(".\\data"));
+    let out_raw = required_path(args, "--out-raw")?;
+    let poll_hz = optional_f64(args, "--poll-hz", 120.0)?;
+    let chunk_rows = optional_usize(args, "--chunk-rows", 256)?;
+    let status_interval_ms = optional_u64(args, "--status-interval-ms", 2000)?;
+    let flush_interval_ms = optional_u64(args, "--flush-interval-ms", 2000)?;
+    let poll_interval = Duration::from_secs_f64(1.0 / poll_hz.max(1.0));
+    let status_interval = Duration::from_millis(status_interval_ms.max(250));
+    let flush_interval = if flush_interval_ms == 0 {
+        None
+    } else {
+        Some(Duration::from_millis(flush_interval_ms.max(250)))
+    };
+
+    ensure_parent_dir(out.as_deref().unwrap_or(&out_dir))?;
+    if out.is_none() {
+        std::fs::create_dir_all(&out_dir)?;
+    }
+    ensure_parent_dir(&out_raw)?;
+
+    println!("waiting for ACC shared memory...");
+    let mut reader: Option<AccSharedMemoryReader> = None;
+    let mut writer: Option<BinaryTelemetryWriter<File>> = None;
+    let mut raw_file: Option<std::fs::File> = None;
+    let mut output_path: Option<PathBuf> = None;
+    let mut sample_tick = 0u64;
+    let mut recording_started_at = Instant::now();
+    let mut last_status_log = Instant::now() - status_interval;
+    let mut last_flush = Instant::now();
+    let mut last_status: Option<AccGameStatus> = None;
+
+    loop {
+        let tick_start = Instant::now();
+
+        if reader.is_none() {
+            match AccSharedMemoryReader::open() {
+                Ok(opened) => {
+                    println!("connected to ACC shared memory");
+                    reader = Some(opened);
+                    last_status = None;
+                }
+                Err(err) => {
+                    if last_status_log.elapsed() >= status_interval {
+                        println!("ACC not available yet: {err}");
+                        last_status_log = Instant::now();
+                    }
+                    sleep_remaining(tick_start, poll_interval);
+                    continue;
+                }
+            }
+        }
+
+        let active_reader = reader.as_mut().expect("reader exists");
+        let status = match active_reader.status() {
+            Ok(status) => status,
+            Err(err) => {
+                if let Some(active_writer) = writer.take() {
+                    let (_, summary) = active_writer.finish()?;
+                    println!(
+                        "shared memory disappeared; finished acctlm recording {} samples in {} chunks",
+                        summary.total_samples, summary.chunk_count
+                    );
+                    if let Some(ref p) = output_path {
+                        append_lap_index_to_file(p);
+                    }
+                }
+                if let Some(mut f) = raw_file.take() {
+                    let _ = f.flush();
+                }
+                if last_status_log.elapsed() >= status_interval {
+                    println!("lost ACC shared memory before recording: {err}");
+                    last_status_log = Instant::now();
+                }
+                reader = None;
+                sleep_remaining(tick_start, poll_interval);
+                continue;
+            }
+        };
+
+        if Some(status) != last_status {
+            println!("ACC status: {}", status.label());
+            last_status = Some(status);
+        }
+
+        if status.is_live() {
+            if writer.is_none() {
+                let session = active_reader.session_info();
+                let path = match &out {
+                    Some(path) => path.clone(),
+                    None => out_dir.join(default_recording_name(
+                        &session.track_name,
+                        &session.car_model,
+                    )),
+                };
+                ensure_parent_dir(&path)?;
+
+                let mut metadata = SessionMetadata::new(
+                    session.track_name,
+                    session.car_model,
+                    poll_hz,
+                );
+                let static_bytes = active_reader.read_static_bytes()?;
+                let stat = SPageFileStatic::from_raw(&static_bytes);
+                metadata.sm_version = stat.sm_version_str();
+                metadata.ac_version = stat.ac_version_str();
+                metadata.number_of_sessions = stat.number_of_sessions;
+                metadata.num_cars = stat.num_cars;
+                metadata.sector_count = stat.sector_count;
+                metadata.max_rpm = stat.max_rpm;
+                metadata.max_torque = stat.max_torque;
+                metadata.max_power = stat.max_power;
+                metadata.max_fuel = stat.max_fuel;
+                metadata.penalties_enabled = stat.penalties_enabled;
+                metadata.raw_static_bytes = static_bytes.clone();
+
+                let config = LiveTelemetryConfig {
+                    poll_hz,
+                    chunk_rows,
+                };
+                writer = Some(BinaryTelemetryWriter::create_file(
+                    &path, metadata, config,
+                )?);
+                output_path = Some(path.clone());
+
+                let phys = active_reader.read_raw_physics()?;
+                let graph = active_reader.read_raw_graphics()?;
+                let mut f = std::fs::File::create(&out_raw)?;
+                f.write_all(b"ACCMR\0")?;
+                f.write_all(&1u16.to_le_bytes())?;
+                f.write_all(&poll_hz.to_le_bytes())?;
+                f.write_all(&(phys.len() as u32).to_le_bytes())?;
+                f.write_all(&(graph.len() as u32).to_le_bytes())?;
+                f.write_all(&(static_bytes.len() as u32).to_le_bytes())?;
+                f.write_all(&static_bytes)?;
+                raw_file = Some(f);
+
+                sample_tick = 0;
+                recording_started_at = Instant::now();
+                last_flush = Instant::now();
+                println!(
+                    "recording started: {} (acctlm) and {} (accraw)",
+                    output_path.as_ref().unwrap().display(),
+                    out_raw.display()
+                );
+                sleep_remaining(tick_start, poll_interval);
+                continue;
+            }
+
+            let phys = active_reader.read_raw_physics()?;
+            let graph = active_reader.read_raw_graphics()?;
+            let ts_ns = recording_started_at
+                .elapsed()
+                .as_nanos()
+                .min(u64::MAX as u128) as u64;
+
+            if let Some(ref mut f) = raw_file {
+                f.write_all(&sample_tick.to_le_bytes())?;
+                f.write_all(&ts_ns.to_le_bytes())?;
+                f.write_all(&phys)?;
+                f.write_all(&graph)?;
+            }
+
+            if let Some(active_writer) = writer.as_mut() {
+                let frame = parse_raw_frame(sample_tick, ts_ns, &phys, &graph)?;
+                active_writer.write_frame(&frame)?;
+            }
+
+            sample_tick = sample_tick.saturating_add(1);
+        } else if status.is_pause() {
+            if writer.is_some() && last_status_log.elapsed() >= status_interval {
+                println!("ACC paused; recording is kept open and sampling is suspended");
+                last_status_log = Instant::now();
+            }
+        } else if let Some(active_writer) = writer.take() {
+            let (_, summary) = active_writer.finish()?;
+            println!(
+                "session ended; finished acctlm recording {} samples in {} chunks",
+                summary.total_samples, summary.chunk_count
+            );
+            if let Some(ref p) = output_path {
+                println!("acctlm output: {}", p.display());
+                append_lap_index_to_file(p);
+            }
+            if let Some(mut f) = raw_file.take() {
+                f.flush()?;
+                println!("accraw output: {}", out_raw.display());
+            }
+            return Ok(());
+        } else if last_status_log.elapsed() >= status_interval {
+            println!(
+                "waiting for live session, current status: {}",
+                status.label()
+            );
+            last_status_log = Instant::now();
+        }
+
+        if let (Some(interval), Some(active_writer)) = (flush_interval, writer.as_mut()) {
+            if last_flush.elapsed() >= interval {
+                active_writer.flush_to_disk()?;
+                last_flush = Instant::now();
+            }
+        }
+
+        sleep_remaining(tick_start, poll_interval);
+    }
+}
+
 fn parse_raw_command(args: &[String]) -> TelemetryResult<()> {
     let input = required_path(args, "--input")?;
     let out = required_path(args, "--out")?;
@@ -833,100 +927,13 @@ fn parse_raw_command(args: &[String]) -> TelemetryResult<()> {
 
 fn build_lap_index_command(args: &[String]) -> TelemetryResult<()> {
     let input = required_path(args, "--input")?;
-    let reader = BinaryTelemetryReader::open(&input)?;
-    let session_samples = reader.read_all_session().unwrap_or_default();
-    if session_samples.is_empty() {
-        return Err(TelemetryError::InvalidArgument("no session data".into()));
-    }
-
-    // Detect lap boundaries using normalized_car_position
-    let mut crossings: Vec<usize> = Vec::new();
-    for i in 1..session_samples.len() {
-        let prev_pos = session_samples[i-1].normalized_car_position;
-        let cur_pos = session_samples[i].normalized_car_position;
-        if prev_pos > 0.8 && cur_pos < 0.2 { crossings.push(i); }
-    }
-
-    let mut entries: Vec<LapIndexEntry> = Vec::new();
-    let mut start_idx: usize = 0;
-    let mut lap_number: i32 = 0;
-
-    for &cross_idx in &crossings {
-        let sample_count = (cross_idx - start_idx) as u32;
-entries.push(LapIndexEntry {
-            lap_number, start_tick: session_samples[start_idx].sample_tick,
-            end_tick: session_samples[cross_idx-1].sample_tick,
-            sample_count, is_valid: (lap_number != 0 && session_samples[cross_idx-1].is_valid_lap != 0) as i32,
-            is_out_lap: (lap_number == 0) as i32,
-        });
-        start_idx = cross_idx;
-        lap_number += 1;
-    }
-    // Last (incomplete) lap
-    let last_idx = session_samples.len() - 1;
-    entries.push(module_live_telemetry::types::LapIndexEntry {
-        lap_number, start_tick: session_samples[start_idx].sample_tick,
-        end_tick: session_samples[last_idx].sample_tick,
-        sample_count: (last_idx - start_idx + 1) as u32,
-        is_valid: (lap_number != 0) as i32,
-        is_out_lap: (lap_number == 0) as i32,
-    });
-
-    // Append to file
-    let mut file = std::fs::OpenOptions::new().append(true).open(&input)?;
-    file.write_all(&module_live_telemetry::format::LAP_INDEX_MAGIC)?;
-    file.write_all(&(entries.len() as u32).to_le_bytes())?;
-    for e in &entries {
-        file.write_all(&e.lap_number.to_le_bytes())?;
-        file.write_all(&e.start_tick.to_le_bytes())?;
-        file.write_all(&e.end_tick.to_le_bytes())?;
-        file.write_all(&e.sample_count.to_le_bytes())?;
-        file.write_all(&e.is_valid.to_le_bytes())?;
-        file.write_all(&e.is_out_lap.to_le_bytes())?;
-    }
-    println!("lap index: {} laps appended to {}", entries.len(), input.display());
+    let count = append_lap_index(&input)?;
+    println!("lap index: {count} laps appended to {}", input.display());
     Ok(())
 }
 
 fn append_lap_index_to_file(path: &std::path::Path) {
-    // Best-effort: silently skip if file doesn't exist or has no session data
-    if let Ok(reader) = BinaryTelemetryReader::open(path) {
-        let samples = reader.read_all_session().unwrap_or_default();
-        if samples.len() < 2 { return; }
-        // Detect lap boundaries
-        let mut crossings: Vec<usize> = Vec::new();
-        for i in 1..samples.len() {
-            let p = samples[i-1].normalized_car_position;
-            let c = samples[i].normalized_car_position;
-            if p > 0.8 && c < 0.2 { crossings.push(i); }
-        }
-        let mut entries = Vec::new();
-        let mut start = 0usize;
-        let mut num = 0i32;
-        for &cx in &crossings {
-            entries.push(LapIndexEntry { lap_number: num, start_tick: samples[start].sample_tick,
-                end_tick: samples[cx-1].sample_tick, sample_count: (cx-start) as u32,
-                is_valid: (num != 0 && samples[cx-1].is_valid_lap != 0) as i32,
-                is_out_lap: (num == 0) as i32 });
-            start = cx; num += 1;
-        }
-        let last = samples.len() - 1;
-        entries.push(LapIndexEntry { lap_number: num, start_tick: samples[start].sample_tick,
-            end_tick: samples[last].sample_tick, sample_count: (last-start+1) as u32,
-            is_valid: (num != 0) as i32, is_out_lap: (num == 0) as i32 });
-        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(path) {
-            let _ = f.write_all(&module_live_telemetry::format::LAP_INDEX_MAGIC);
-            let _ = f.write_all(&(entries.len() as u32).to_le_bytes());
-            for e in &entries {
-                let _ = f.write_all(&e.lap_number.to_le_bytes());
-                let _ = f.write_all(&e.start_tick.to_le_bytes());
-                let _ = f.write_all(&e.end_tick.to_le_bytes());
-                let _ = f.write_all(&e.sample_count.to_le_bytes());
-                let _ = f.write_all(&e.is_valid.to_le_bytes());
-                let _ = f.write_all(&e.is_out_lap.to_le_bytes());
-            }
-        }
-    }
+    let _ = append_lap_index(path);
 }
 
 fn export_lap_field_command(args: &[String]) -> TelemetryResult<()> {
@@ -1241,9 +1248,12 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
     let poll_interval = Duration::from_secs_f64(1.0 / poll_hz.max(1.0));
     let status_interval = Duration::from_millis(2000);
 
-    // Setup registry with built-in items
-    let mut registry = ComputeRegistry::new();
-    registry.register_realtime(Box::new(SpeedMps));
+    // Optional reference lap for built-in DeltaTimeToLifeBestLap
+    let ref_lap_path = optional_path(args, "--ref-lap");
+    let ref_lap_number = optional_i32(args, "--ref-lap-number", 1)?;
+
+    // Setup registry
+    let registry = ComputeRegistry::new();
 
     // Setup distributor + dashboard
     let mut distributor = TelemetryDistributor::new(64);
@@ -1252,7 +1262,26 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
     let (sink_tx, sink_rx) = bounded::<std::collections::HashMap<String, f64>>(64);
     let sink = ChannelSink::new(sink_tx);
     let mut dashboard = DashboardService::new(registry, Box::new(sink));
-    dashboard.subscribe("speed_mps".into(), Duration::from_millis(interval_ms), None).unwrap();
+
+    // If reference lap is specified, register and subscribe DeltaTimeToLifeBestLap
+    if let Some(ref_path) = ref_lap_path {
+        match dashboard.registry_mut().register_calc_realtime(Box::new(DeltaTimeToLifeBestLap::new())) {
+            Ok(()) => {
+                let key = ItemKey::parse("calc:delta_time_to_life_best_lap").unwrap();
+                let ref_source = ReferenceSource {
+                    file_path: ref_path,
+                    lap_number: ref_lap_number,
+                };
+                dashboard.subscribe(key, Duration::from_millis(100), Some(ref_source)).unwrap();
+                println!("delta_time_to_life_best_lap: reference lap #{} loaded", ref_lap_number);
+            }
+            Err(e) => {
+                eprintln!("warning: failed to register delta_time_to_life_best_lap: {e}");
+            }
+        }
+    } else {
+        println!("delta_time_to_life_best_lap: not enabled (use --ref-lap <file> --ref-lap-number <N>)");
+    }
 
     // Start output thread to print dashboard data as simple text
     std::thread::spawn(move || {
@@ -1267,7 +1296,8 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
         }
     });
 
-    let dashboard_handle = spawn_dashboard(dashboard, dashboard_rx);
+    let (_dash_cmd_tx, dash_cmd_rx) = bounded::<DashboardCommand>(1);
+    let dashboard_handle = spawn_dashboard(dashboard, dashboard_rx, dash_cmd_rx);
 
     // Graceful shutdown on Ctrl+C
     let running = std::sync::Arc::new(AtomicBool::new(true));
@@ -1340,9 +1370,10 @@ fn print_usage() {
     println!(
         "ACC live telemetry\n\n\
 commands:\n  \
-record [--out <file> | --out-dir <dir>] [--poll-hz 120] [--chunk-rows 256] [--dashboard [--dashboard-interval-ms 50]]\n  \
-serve [--poll-hz 120] [--interval-ms 50]\n  \
+record [--out <file> | --out-dir <dir>] [--poll-hz 120] [--chunk-rows 256] [--dashboard [--dashboard-interval-ms 50] [--ref-lap <file> --ref-lap-number <N>]]\n  \
+serve [--poll-hz 120] [--interval-ms 50] [--ref-lap <file> --ref-lap-number <N>]\n  \
 record-raw --out <file> [--poll-hz 120] [--status-interval-ms 2000]\n  \
+record-all [--out <file> | --out-dir <dir>] --out-raw <file> [--poll-hz 120] [--chunk-rows 256] [--status-interval-ms 2000] [--flush-interval-ms 2000]\n  \
 inspect --input <file>\n  \
 export --input <file> [--out <file>] [--format csv]\n  \
 laps --input <file>\n  \

@@ -115,6 +115,7 @@ impl BinaryTelemetryReader {
             chunk_count,
             total_bytes: bytes.len() as u64,
             footer_offset,
+            duration: std::time::Duration::ZERO,
         };
 
         // Try to read lap index after footer (only when footer exists)
@@ -406,6 +407,16 @@ fn decode_metadata(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
                     raw
                 } else { Vec::new() }
             } else { Vec::new() }
+        },
+        // v5: session_type (backward compatible)
+        session_type: {
+            let remaining4 = bytes.len().saturating_sub(cursor.position() as usize);
+            if remaining4 >= 8 {
+                let has = read_i32(&mut cursor).unwrap_or(0);
+                if has != 0 {
+                    Some(read_i32(&mut cursor).unwrap_or(0))
+                } else { None }
+            } else { None }
         },
     })
 }

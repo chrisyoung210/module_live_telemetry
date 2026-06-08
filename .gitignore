@@ -1,8 +1,11 @@
 /target/
 /dist/
+/data/
+/.opencode/
 /data/*.acctlm
 /data/*.accraw
 /data/*.csv
 /.codegraph/
 /backup_data/
 /.sisyphus/
+/data_analysis/

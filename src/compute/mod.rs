@@ -34,6 +34,8 @@ pub enum ComputeError {
     ComputationFailed(String),
     /// 计算项未在注册表中找到
     ItemNotFound(String),
+    /// 注册失败（名称无效、重复等）
+    InvalidRegistration(String),
 }
 
 impl fmt::Display for ComputeError {
@@ -43,6 +45,7 @@ impl fmt::Display for ComputeError {
             Self::InvalidReferenceData => write!(f, "无效参考数据"),
             Self::ComputationFailed(msg) => write!(f, "计算失败: {msg}"),
             Self::ItemNotFound(name) => write!(f, "计算项未找到: {name}"),
+            Self::InvalidRegistration(msg) => write!(f, "注册失败: {msg}"),
         }
     }
 }

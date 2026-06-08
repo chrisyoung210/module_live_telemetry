@@ -1,12 +1,17 @@
-//! 计算项 trait 定义与示例实现
+//! 计算项 trait 定义与内置实现
 //!
 //! 包含：
 //! - [`RealtimeComputeItem`] — 实时逐帧计算 trait
 //! - [`BatchComputeItem`] — 批量整圈计算 trait
-//! - [`SpeedMps`] — 静态计算项示例：速度单位转换 (km/h → m/s)
-//! - [`DeltaToBestLap`] — 动态计算项示例：当前圈与参考圈的时间差
+//! - [`DeltaTimeToLifeBestLap`] — 内置计算项：当前圈与历史最佳圈的时间差
+//! - [`DeltaTimeToSessionBestLap`] — 内置计算项：当前圈与 Session 最佳圈的时间差
+//! - [`all_builtin_calculated_items`] — 列出所有内置计算项
+//!
+//! 内置 calculated item 由用户通过 CLI 参数（`--ref-lap`）选择启用，
+//! 而非硬编码在启动流程中。
 
 use super::{ComputeContext, ComputeError, ComputeResult};
+use crate::item_key::{ItemKey, ItemType};
 use crate::TelemetryFrame;
 
 // ---------------------------------------------------------------------------
@@ -42,70 +47,36 @@ pub trait BatchComputeItem: Send {
 }
 
 // ---------------------------------------------------------------------------
-// Example: Static item — SpeedMps
+// Built-in: DeltaTimeToLifeBestLap
 // ---------------------------------------------------------------------------
 
-/// 速度单位转换：公里/小时 → 米/秒
+/// 当前圈与历史最佳圈的时间差计算
 ///
-/// 静态计算项，不依赖任何状态，将 `speed_kmh` 字段转换为米/秒。
-pub struct SpeedMps;
-
-impl Default for SpeedMps {
-    fn default() -> Self {
-        Self
-    }
-}
-
-impl RealtimeComputeItem for SpeedMps {
-    fn name(&self) -> &str {
-        "speed_mps"
-    }
-
-    fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
-        Ok(ctx.current_frame.controls.speed_kmh as f64 / 3.6)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Example: Dynamic item — DeltaToBestLap
-// ---------------------------------------------------------------------------
-
-/// 当前圈与参考圈的时间差计算
+/// 根据标准化赛道位置（0.0~1.0）在参考圈中查找对应时间点，
+/// 返回时间差（毫秒）。正值 = 比参考圈慢，负值 = 比参考圈快。
 ///
-/// 动态计算项，根据标准化赛道位置在参考圈中查找对应时间点，
-/// 计算当前圈与参考圈的时间差值（毫秒）。
-///
-/// 使用 `last_lap_number` 和 `index` 状态变量来优化搜索效率——
-/// 圈号变化时重置索引，避免每帧从头扫描。
-pub struct DeltaToBestLap {
+/// 参考圈通过 `ReferenceSource` 在订阅时指定（文件路径 + 圈号），
+/// 由 `ComputeRegistry::resolve_reference_lap()` 自动加载和缓存。
+pub struct DeltaTimeToLifeBestLap {
     last_lap_number: i32,
     index: usize,
 }
 
-impl Default for DeltaToBestLap {
+impl Default for DeltaTimeToLifeBestLap {
     fn default() -> Self {
-        Self {
-            last_lap_number: -1,
-            index: 0,
-        }
+        Self { last_lap_number: -1, index: 0 }
     }
 }
 
-impl DeltaToBestLap {
-    /// 创建新的 DeltaToBestLap 计算项
-    pub fn new() -> Self {
-        Self::default()
-    }
+impl DeltaTimeToLifeBestLap {
+    pub fn new() -> Self { Self::default() }
 }
 
-impl RealtimeComputeItem for DeltaToBestLap {
-    fn name(&self) -> &str {
-        "delta_to_best_lap"
-    }
+impl RealtimeComputeItem for DeltaTimeToLifeBestLap {
+    fn name(&self) -> &str { "delta_time_to_life_best_lap" }
 
     fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
         let reference = ctx.reference_lap.ok_or(ComputeError::NoValidData)?;
-
         if reference.is_empty() {
             return Err(ComputeError::InvalidReferenceData);
         }
@@ -114,16 +85,10 @@ impl RealtimeComputeItem for DeltaToBestLap {
         let current_pos = ctx.current_frame.session.normalized_car_position;
         let current_time = ctx.current_frame.timing.i_current_time as f64;
 
-        // 圈号变化时重置索引
         if current_lap != self.last_lap_number {
             self.last_lap_number = current_lap;
             self.index = 0;
         }
-
-        // 在参考圈中查找对应位置
-        // 算法：在参考圈中线性扫描，找到 normalized_car_position 落在
-        // [reference[i], reference[i+1]) 内的第一个位置 i。
-        // 如果同一圈内车辆倒车或位置回退，则从头重新匹配，避免沿用过高的参考索引。
         if self.index < reference.len()
             && current_pos < reference[self.index].session.normalized_car_position
         {
@@ -132,7 +97,6 @@ impl RealtimeComputeItem for DeltaToBestLap {
 
         for i in self.index..reference.len() {
             let ref_time = reference[i].timing.i_current_time as f64;
-
             if i == reference.len() - 1
                 || current_pos < reference[i + 1].session.normalized_car_position
             {
@@ -147,6 +111,121 @@ impl RealtimeComputeItem for DeltaToBestLap {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Built-in: DeltaTimeToSessionBestLap
+// ---------------------------------------------------------------------------
+
+/// 当前圈与本 Session 最佳圈的时间差计算
+///
+/// 与 [`DeltaTimeToLifeBestLap`] 计算逻辑相同，但参考圈来自本 session 运行时动态更新的最佳圈，
+/// 而非外部 `ReferenceSource` 文件。
+///
+/// 启动时无参考圈，`compute()` 返回 `Err(NoValidData)`。
+/// 当用户跑出有效圈后，通过 `LapCompletedCallback` + `replace_reference()` 动态注入参考圈。
+pub struct DeltaTimeToSessionBestLap {
+    last_lap_number: i32,
+    index: usize,
+}
+
+impl Default for DeltaTimeToSessionBestLap {
+    fn default() -> Self {
+        Self { last_lap_number: -1, index: 0 }
+    }
+}
+
+impl DeltaTimeToSessionBestLap {
+    pub fn new() -> Self { Self::default() }
+}
+
+impl RealtimeComputeItem for DeltaTimeToSessionBestLap {
+    fn name(&self) -> &str { "delta_time_to_session_best_lap" }
+
+    fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
+        let reference = ctx.reference_lap.ok_or(ComputeError::NoValidData)?;
+        if reference.is_empty() {
+            return Err(ComputeError::InvalidReferenceData);
+        }
+
+        let current_lap = ctx.current_frame.session.completed_laps;
+        let current_pos = ctx.current_frame.session.normalized_car_position;
+        let current_time = ctx.current_frame.timing.i_current_time as f64;
+
+        if current_lap != self.last_lap_number {
+            self.last_lap_number = current_lap;
+            self.index = 0;
+        }
+        if self.index < reference.len()
+            && current_pos < reference[self.index].session.normalized_car_position
+        {
+            self.index = 0;
+        }
+
+        for i in self.index..reference.len() {
+            let ref_time = reference[i].timing.i_current_time as f64;
+            if i == reference.len() - 1
+                || current_pos < reference[i + 1].session.normalized_car_position
+            {
+                self.index = i;
+                return Ok(ref_time - current_time);
+            }
+        }
+
+        Err(ComputeError::ComputationFailed(
+            "无法在参考圈中找到对应位置".into(),
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Built-in item catalog
+// ---------------------------------------------------------------------------
+
+/// 内置 calculated item 条目
+#[derive(Debug, Clone)]
+pub struct BuiltinCalcItemEntry {
+    /// 完整标识键，如 `calc:delta_time_to_life_best_lap`
+    pub key: ItemKey,
+    /// 中文描述
+    pub description: &'static str,
+    /// 单位
+    pub unit: Option<&'static str>,
+    /// 是否需要参考圈数据
+    pub requires_reference: bool,
+}
+
+/// 返回所有内置 calculated item 的目录
+///
+/// 当前内置项：
+/// - `calc:delta_time_to_life_best_lap` — 当前圈与历史最佳圈时间差（毫秒），需外部参考圈文件
+/// - `calc:delta_time_to_session_best_lap` — 当前圈与本次 session 最佳圈时间差（毫秒），
+///   参考圈运行时动态注入
+///
+/// # 使用示例
+///
+/// ```rust
+/// use module_live_telemetry::compute::items::all_builtin_calculated_items;
+///
+/// for item in all_builtin_calculated_items() {
+///     println!("{} — {} [{:?}]", item.key, item.description, item.unit);
+/// }
+/// ```
+pub fn all_builtin_calculated_items() -> Vec<BuiltinCalcItemEntry> {
+    vec![
+        BuiltinCalcItemEntry {
+            key: ItemKey::new(ItemType::Calculated, "delta_time_to_life_best_lap"),
+            description: "当前圈与历史最佳圈时间差",
+            unit: Some("ms"),
+            requires_reference: true,
+        },
+        BuiltinCalcItemEntry {
+            key: ItemKey::new(ItemType::Calculated, "delta_time_to_session_best_lap"),
+            description: "当前圈与本Session最佳圈时间差",
+            unit: Some("ms"),
+            requires_reference: true,
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,157 +237,122 @@ mod tests {
 
     fn make_frame(speed: f32, lap: i32, pos: f32, time: i32) -> TelemetryFrame {
         TelemetryFrame {
-            sample_tick: 0,
-            timestamp_ns: 0,
-            controls: ControlSample {
-                speed_kmh: speed,
-                ..ControlSample::default()
-            },
-            motion: MotionSample::default(),
-            tyres: TyreSample::default(),
+            sample_tick: 0, timestamp_ns: 0,
+            controls: ControlSample { speed_kmh: speed, ..ControlSample::default() },
+            motion: MotionSample::default(), tyres: TyreSample::default(),
             powertrain: PowertrainSample::default(),
             session: SessionSample {
-                completed_laps: lap,
-                normalized_car_position: pos,
+                completed_laps: lap, normalized_car_position: pos,
                 ..SessionSample::default()
             },
-            timing: TimingSample {
-                i_current_time: time,
-                ..TimingSample::default()
-            },
-            car_state: CarStateSample::default(),
-            environment: EnvironmentSample::default(),
+            timing: TimingSample { i_current_time: time, ..TimingSample::default() },
+            car_state: CarStateSample::default(), environment: EnvironmentSample::default(),
             other_cars: OtherCarsSample::default(),
         }
     }
 
     #[test]
-    fn test_speed_mps_conversion() {
-        let frame = make_frame(100.0, 1, 0.0, 0);
-        let values = HashMap::new();
-        let ctx = ComputeContext::new(&frame, &values);
-        let mut item = SpeedMps;
-        let result = item.compute(&ctx).unwrap();
-        assert!((result - 27.7777).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_speed_mps_zero() {
-        let frame = make_frame(0.0, 1, 0.0, 0);
-        let values = HashMap::new();
-        let ctx = ComputeContext::new(&frame, &values);
-        let mut item = SpeedMps;
-        let result = item.compute(&ctx).unwrap();
-        assert_eq!(result, 0.0);
-    }
-
-    #[test]
-    fn test_delta_to_best_lap_normal() {
+    fn test_delta_time_to_life_best_lap_normal() {
         let reference = vec![
             make_frame(200.0, 1, 0.0, 0),
             make_frame(200.0, 1, 0.5, 50000),
             make_frame(200.0, 1, 1.0, 100000),
         ];
-        let current = make_frame(200.0, 1, 0.5, 51000);
+        let frame = make_frame(200.0, 1, 0.5, 51000);
         let values = HashMap::new();
         let ctx = ComputeContext::with_reference(
-            &current, &values, &reference,
-            super::super::context::ReferenceSource {
-                file_path: std::path::PathBuf::from("test.acctlm"),
-                lap_number: 1,
+            &frame, &values, &reference,
+            crate::compute::context::ReferenceSource {
+                file_path: std::path::PathBuf::from("t.acctlm"), lap_number: 1,
             },
         );
-        let mut item = DeltaToBestLap::new();
-        let result = item.compute(&ctx).unwrap();
-        assert_eq!(result, -1000.0);
+        let mut item = DeltaTimeToLifeBestLap::new();
+        let delta = item.compute(&ctx).unwrap();
+        assert!((delta + 1000.0).abs() < 1.0);
     }
 
     #[test]
-    fn test_delta_to_best_lap_reset_on_lap_change() {
-        let reference = vec![
-            make_frame(200.0, 1, 0.0, 0),
-            make_frame(200.0, 1, 0.5, 50000),
-            make_frame(200.0, 1, 1.0, 100000),
-        ];
+    fn test_delta_time_to_life_best_lap_no_reference() {
+        let frame = make_frame(200.0, 1, 0.5, 51000);
         let values = HashMap::new();
-
-        let frame1 = make_frame(200.0, 1, 0.8, 75000);
-        let ctx1 = ComputeContext::with_reference(
-            &frame1, &values, &reference,
-            super::super::context::ReferenceSource {
-                file_path: std::path::PathBuf::from("test.acctlm"), lap_number: 1,
-            },
-        );
-        let mut item = DeltaToBestLap::new();
-        let _ = item.compute(&ctx1).unwrap();
-        assert_eq!(item.index, 1);
-
-        let frame2 = make_frame(200.0, 2, 0.1, 5000);
-        let ctx2 = ComputeContext::with_reference(
-            &frame2, &values, &reference,
-            super::super::context::ReferenceSource {
-                file_path: std::path::PathBuf::from("test.acctlm"), lap_number: 1,
-            },
-        );
-        let result = item.compute(&ctx2).unwrap();
-        assert_eq!(result, -5000.0);
-        assert_eq!(item.index, 0);
-    }
-
-    #[test]
-    fn test_delta_to_best_lap_resets_index_on_position_backtrack() {
-        let reference = vec![
-            make_frame(200.0, 1, 0.0, 0),
-            make_frame(200.0, 1, 0.5, 50000),
-            make_frame(200.0, 1, 1.0, 100000),
-        ];
-        let values = HashMap::new();
-        let mut item = DeltaToBestLap::new();
-
-        let frame1 = make_frame(200.0, 1, 0.8, 75000);
-        let ctx1 = ComputeContext::with_reference(
-            &frame1, &values, &reference,
-            super::super::context::ReferenceSource {
-                file_path: std::path::PathBuf::from("test.acctlm"), lap_number: 1,
-            },
-        );
-        let _ = item.compute(&ctx1).unwrap();
-        assert_eq!(item.index, 1);
-
-        let frame2 = make_frame(200.0, 1, 0.4, 40000);
-        let ctx2 = ComputeContext::with_reference(
-            &frame2, &values, &reference,
-            super::super::context::ReferenceSource {
-                file_path: std::path::PathBuf::from("test.acctlm"), lap_number: 1,
-            },
-        );
-        let result = item.compute(&ctx2).unwrap();
-
-        assert_eq!(result, -40000.0);
-        assert_eq!(item.index, 0);
-    }
-
-    #[test]
-    fn test_delta_to_best_lap_no_reference() {
-        let current = make_frame(200.0, 1, 0.5, 51000);
-        let values = HashMap::new();
-        let ctx = ComputeContext::new(&current, &values);
-        let mut item = DeltaToBestLap::new();
+        let ctx = ComputeContext::new(&frame, &values);
+        let mut item = DeltaTimeToLifeBestLap::new();
         assert!(item.compute(&ctx).is_err());
     }
 
     #[test]
-    fn test_delta_to_best_lap_empty_reference() {
-        let current = make_frame(200.0, 1, 0.5, 51000);
+    fn test_delta_time_to_life_best_lap_empty_reference() {
+        let frame = make_frame(200.0, 1, 0.5, 51000);
         let values = HashMap::new();
-        let reference: Vec<TelemetryFrame> = vec![];
+        let ctx = ComputeContext {
+            current_frame: &frame,
+            computed_values: &values,
+            reference_lap: Some(&[]),
+            reference_source: None,
+        };
+        let mut item = DeltaTimeToLifeBestLap::new();
+        assert!(item.compute(&ctx).is_err());
+    }
+
+    #[test]
+    fn test_delta_time_to_life_best_lap_reset_on_lap_change() {
+        let reference = vec![
+            make_frame(200.0, 1, 0.0, 0),
+            make_frame(200.0, 2, 0.5, 50000),
+        ];
+        let frame = make_frame(200.0, 2, 0.5, 52000);
+        let values = HashMap::new();
         let ctx = ComputeContext::with_reference(
-            &current, &values, &reference,
-            super::super::context::ReferenceSource {
-                file_path: std::path::PathBuf::from("test.acctlm"), lap_number: 1,
+            &frame, &values, &reference,
+            crate::compute::context::ReferenceSource {
+                file_path: std::path::PathBuf::from("t.acctlm"), lap_number: 1,
             },
         );
-        let mut item = DeltaToBestLap::new();
-        assert!(item.compute(&ctx).is_err());
+        let mut item = DeltaTimeToLifeBestLap::new();
+        let delta = item.compute(&ctx).unwrap();
+        assert!((delta + 2000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_all_builtin_calculated_items() {
+        let items = super::all_builtin_calculated_items();
+        assert_eq!(items.len(), 2);
+
+        let delta = items.iter().find(|i| i.key.to_string() == "calc:delta_time_to_life_best_lap").unwrap();
+        assert_eq!(delta.description, "当前圈与历史最佳圈时间差");
+        assert!(delta.requires_reference);
+
+        let session = items.iter().find(|i| i.key.to_string() == "calc:delta_time_to_session_best_lap").unwrap();
+        assert_eq!(session.description, "当前圈与本Session最佳圈时间差");
+        assert!(session.requires_reference);
+    }
+
+    #[test]
+    fn test_session_best_lap_no_reference() {
+        let frame = make_frame(200.0, 1, 0.5, 51000);
+        let values = HashMap::new();
+        let ctx = ComputeContext::new(&frame, &values);
+        let mut item = DeltaTimeToSessionBestLap::new();
+        assert!(item.compute(&ctx).is_err()); // NoValidData
+    }
+
+    #[test]
+    fn test_session_best_lap_with_reference() {
+        let reference = vec![
+            make_frame(200.0, 1, 0.0, 0),
+            make_frame(200.0, 1, 0.5, 50000),
+            make_frame(200.0, 1, 1.0, 100000),
+        ];
+        let frame = make_frame(200.0, 1, 0.5, 52000);
+        let values = HashMap::new();
+        let ctx = ComputeContext::with_reference(
+            &frame, &values, &reference,
+            crate::compute::context::ReferenceSource {
+                file_path: std::path::PathBuf::from("t.acctlm"), lap_number: 1,
+            },
+        );
+        let mut item = DeltaTimeToSessionBestLap::new();
+        let delta = item.compute(&ctx).unwrap();
+        assert!((delta + 2000.0).abs() < 1.0); // 慢 2 秒
     }
 }

@@ -14,6 +14,7 @@ use crate::types::{
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
+use std::time::Duration;
 
 // ---- Config ----
 #[derive(Debug, Clone)]
@@ -32,6 +33,58 @@ pub struct TelemetryFrame {
     pub other_cars: OtherCarsSample,
 }
 
+impl TelemetryFrame {
+    /// 按完整路径读取 raw 字段值（用于 raw:xxx.yyy 解析）
+    ///
+    /// 支持路径格式：
+    /// - `controls.speed_kmh` → 子结构体字段
+    /// - `motion.velocity[0]` → 数组元素
+    /// - `sample_tick` → 顶层字段
+    pub fn raw_field_value(&self, path: &str) -> Option<f64> {
+        if let Some((substruct, field)) = path.split_once('.') {
+            match substruct {
+                "controls"    => self.controls.raw_field_value(field),
+                "motion"      => self.motion.raw_field_value(field),
+                "tyres"       => self.tyres.raw_field_value(field),
+                "powertrain"  => self.powertrain.raw_field_value(field),
+                "session"     => self.session.raw_field_value(field),
+                "timing"      => self.timing.raw_field_value(field),
+                "car_state"   => self.car_state.raw_field_value(field),
+                "environment" => self.environment.raw_field_value(field),
+                "other_cars"  => self.other_cars.raw_field_value(field),
+                _ => None,
+            }
+        } else {
+            // 顶层字段
+            match path {
+                "sample_tick"  => Some(self.sample_tick as f64),
+                "timestamp_ns" => Some(self.timestamp_ns as f64),
+                _ => None,
+            }
+        }
+    }
+
+    /// 验证 raw 字段路径是否有效
+    pub fn is_raw_field(path: &str) -> bool {
+        if let Some((substruct, field)) = path.split_once('.') {
+            match substruct {
+                "controls" => crate::types::ControlSample::raw_field_names().contains(&field),
+                "motion" => crate::types::MotionSample::raw_field_names().contains(&field),
+                "tyres" => crate::types::TyreSample::raw_field_names().contains(&field),
+                "powertrain" => crate::types::PowertrainSample::raw_field_names().contains(&field),
+                "session" => crate::types::SessionSample::raw_field_names().contains(&field),
+                "timing" => crate::types::TimingSample::raw_field_names().contains(&field),
+                "car_state" => crate::types::CarStateSample::raw_field_names().contains(&field),
+                "environment" => crate::types::EnvironmentSample::raw_field_names().contains(&field),
+                "other_cars" => crate::types::OtherCarsSample::raw_field_names().contains(&field),
+                _ => false,
+            }
+        } else {
+            matches!(path, "sample_tick" | "timestamp_ns")
+        }
+    }
+}
+
 // ---- Encode result ----
 struct EncodeResult { payload: Vec<u8>, entries: Vec<ColumnEntry>, first_tick: u64, last_tick: u64, first_time: u64, last_time: u64, sample_count: u32 }
 
@@ -40,9 +93,33 @@ pub struct BinaryTelemetryWriter<W: Write + Seek> {
     writer: W, header: FileHeader, config: LiveTelemetryConfig,
     frames: Vec<TelemetryFrame>, index_entries: Vec<IndexEntry>,
     total_frames: u64, next_chunk_seq: u32, finished: bool,
+    bytes_written: u64,
 }impl BinaryTelemetryWriter<File> {
     pub fn create_file(path: impl AsRef<Path>, metadata: SessionMetadata, config: LiveTelemetryConfig) -> TelemetryResult<Self> {
         let file = File::create(path)?;
+        Self::create(file, metadata, config)
+    }
+    /// Create a file for writing, failing if the file already exists.
+    ///
+    /// Uses `OpenOptions::create_new(true)` for exclusive creation.
+    /// The existing `create_file()` method uses `File::create()` for
+    /// backward-compatible overwrite behaviour (used by CLI).
+    pub fn create_file_exclusive(path: impl AsRef<Path>, metadata: SessionMetadata, config: LiveTelemetryConfig) -> TelemetryResult<Self> {
+        use std::fs::OpenOptions;
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path.as_ref())
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    TelemetryError::InvalidArgument(format!(
+                        "output file already exists: {}",
+                        path.as_ref().display()
+                    ))
+                } else {
+                    TelemetryError::Io(e)
+                }
+            })?;
         Self::create(file, metadata, config)
     }
 }
@@ -63,7 +140,7 @@ impl<W: Write + Seek> BinaryTelemetryWriter<W> {
         writer.seek(SeekFrom::Start(0))?;
         header.write_to(&mut writer)?;
         writer.seek(SeekFrom::Start(header.first_chunk_offset))?;
-        Ok(Self { writer, header, config, frames: Vec::with_capacity(metadata.chunk_rows), index_entries: Vec::new(), total_frames: 0, next_chunk_seq: 0, finished: false })
+        Ok(Self { writer, header, config, frames: Vec::with_capacity(metadata.chunk_rows), index_entries: Vec::new(), total_frames: 0, next_chunk_seq: 0, finished: false, bytes_written: 0 })
     }
     pub fn write_frame(&mut self, frame: &TelemetryFrame) -> TelemetryResult<()> {
         if self.finished { return Err(TelemetryError::InvalidArgument("cannot write after finish".into())); }
@@ -74,7 +151,16 @@ impl<W: Write + Seek> BinaryTelemetryWriter<W> {
     }
     pub fn flush_to_disk(&mut self) -> TelemetryResult<()> {
         if !self.frames.is_empty() { self.flush_all_clusters()?; }
-        self.writer.flush()?; Ok(())
+        self.writer.flush()?;
+        self.bytes_written = self.writer.stream_position().unwrap_or(self.bytes_written);
+        Ok(())
+    }
+    /// Approximate number of bytes written so far.
+    ///
+    /// Accurately updated on `flush_to_disk()` and `finish()`.
+    /// Between flushes the value is a lower bound.
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes_written
     }
     pub fn finish(mut self) -> TelemetryResult<(W, RecordingSummary)> {
         if !self.frames.is_empty() { self.flush_all_clusters()?; }
@@ -93,7 +179,8 @@ impl<W: Write + Seek> BinaryTelemetryWriter<W> {
         self.header.write_to(&mut self.writer)?;
         self.writer.flush()?;
         self.finished = true;
-        Ok((self.writer, RecordingSummary { total_samples: self.total_frames, chunk_count: self.next_chunk_seq, total_bytes, footer_offset }))
+        self.bytes_written = total_bytes;
+        Ok((self.writer, RecordingSummary { total_samples: self.total_frames, chunk_count: self.next_chunk_seq, total_bytes, footer_offset, duration: Duration::ZERO }))
     }
     // ---- flush ----
     fn flush_all_clusters(&mut self) -> TelemetryResult<()> {
@@ -168,6 +255,13 @@ out.extend_from_slice(&metadata.num_cars.to_le_bytes());
     if !metadata.raw_static_bytes.is_empty() {
         out.extend_from_slice(&(metadata.raw_static_bytes.len() as u32).to_le_bytes());
         out.extend_from_slice(&metadata.raw_static_bytes);
+    }
+    // v5: session_type (backward compatible, Option<i32>)
+    if let Some(st) = metadata.session_type {
+        out.extend_from_slice(&1i32.to_le_bytes());  // has_session_type flag
+        out.extend_from_slice(&st.to_le_bytes());
+    } else {
+        out.extend_from_slice(&0i32.to_le_bytes());  // no session_type
     }
     out
 }

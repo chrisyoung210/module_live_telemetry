@@ -3,7 +3,10 @@ pub mod dashboard;
 pub mod distributor;
 pub mod error;
 pub mod format;
+pub mod item_key;
+pub mod raw_catalog;
 pub mod reader;
+pub mod recording;
 pub mod shmem;
 pub mod types;
 pub mod writer;
@@ -17,3 +20,4 @@ pub use types::{
 };
 pub use shmem::{parse_raw_frame, SPageFileStatic, RAW_GRAPHICS_SIZE, RAW_PHYSICS_SIZE, RAW_STATIC_SIZE};
 pub use writer::{BinaryTelemetryWriter, LiveTelemetryConfig, TelemetryFrame};
+pub use recording::extract_lap_telemetry;
