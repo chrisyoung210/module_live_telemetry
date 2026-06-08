@@ -6,6 +6,7 @@
 use crate::error::{TelemetryError, TelemetryResult};
 use crate::recording::source::TelemetrySource;
 use crate::shmem::AccGameStatus;
+use crate::SPageFileStatic;
 use crate::types::RecordingSummary;
 use crate::writer::{BinaryTelemetryWriter, LiveTelemetryConfig};
 use crate::distributor::TelemetryDistributor;
@@ -159,11 +160,26 @@ pub fn run_recording_loop(
             if writer.is_none() {
                 // Read session info to get metadata
                 let session = source.session_info()?;
-                let metadata = crate::SessionMetadata::new(
+                let mut metadata = crate::SessionMetadata::new(
                     session.track_name,
                     session.car_model,
                     config.poll_hz,
                 );
+                // Populate extra metadata from static page (matching record CLI behavior)
+                if let Ok(static_bytes) = source.read_static_bytes() {
+                    let stat = SPageFileStatic::from_raw(&static_bytes);
+                    metadata.sm_version = stat.sm_version_str();
+                    metadata.ac_version = stat.ac_version_str();
+                    metadata.number_of_sessions = stat.number_of_sessions;
+                    metadata.num_cars = stat.num_cars;
+                    metadata.sector_count = stat.sector_count;
+                    metadata.max_rpm = stat.max_rpm;
+                    metadata.max_torque = stat.max_torque;
+                    metadata.max_power = stat.max_power;
+                    metadata.max_fuel = stat.max_fuel;
+                    metadata.penalties_enabled = stat.penalties_enabled;
+                    metadata.raw_static_bytes = static_bytes;
+                }
                 let w_config = LiveTelemetryConfig {
                     poll_hz: config.poll_hz,
                     chunk_rows: config.chunk_rows,
@@ -183,7 +199,7 @@ pub fn run_recording_loop(
                 .as_nanos()
                 .min(u64::MAX as u128) as u64;
 
-            match source.read_telemetry_frame(sample_tick, timestamp_ns) {
+            match source.read_all_telemetry_frame(sample_tick, timestamp_ns) {
                 Ok(Some(frame)) => {
                     let frame_arc = Arc::new(frame);
 

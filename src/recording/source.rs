@@ -23,12 +23,30 @@ pub trait TelemetrySource: Send {
     /// Raw static page bytes (for metadata)
     fn read_static_bytes(&mut self) -> TelemetryResult<Vec<u8>>;
 
-    /// Read next telemetry frame.
+    /// Read next telemetry frame (with packet-ID deduplication).
     ///
     /// Returns `Ok(None)` when no new frame is available (e.g. packet
     /// ID unchanged or ACC not live). Returns `Err` on shared-memory
     /// disconnect or other fatal error.
+    ///
+    /// Used by real-time display (e.g. `serve` command) where duplicate
+    /// frames are undesirable.
     fn read_telemetry_frame(
+        &mut self,
+        sample_tick: u64,
+        timestamp_ns: u64,
+    ) -> TelemetryResult<Option<TelemetryFrame>>;
+
+    /// Read every polled frame (no packet-ID deduplication).
+    ///
+    /// Unlike `read_telemetry_frame`, this method always produces a frame
+    /// on every call (returning `Ok(None)` only when not live or no data).
+    /// For real ACC sources this reads raw shared-memory pages and parses
+    /// them via `parse_raw_frame`, producing identical output to the
+    /// `record-raw` + `parse-raw` CLI pipeline.
+    ///
+    /// Used by `run_recording_loop` for lossless recording.
+    fn read_all_telemetry_frame(
         &mut self,
         sample_tick: u64,
         timestamp_ns: u64,
@@ -74,6 +92,17 @@ impl TelemetrySource for AccTelemetrySource {
         timestamp_ns: u64,
     ) -> TelemetryResult<Option<TelemetryFrame>> {
         self.reader.read_telemetry_frame(sample_tick, timestamp_ns)
+    }
+
+    fn read_all_telemetry_frame(
+        &mut self,
+        sample_tick: u64,
+        timestamp_ns: u64,
+    ) -> TelemetryResult<Option<TelemetryFrame>> {
+        let phys = self.reader.read_raw_physics()?;
+        let graph = self.reader.read_raw_graphics()?;
+        let frame = crate::parse_raw_frame(sample_tick, timestamp_ns, &phys, &graph)?;
+        Ok(Some(frame))
     }
 }
 
@@ -230,6 +259,52 @@ impl TelemetrySource for ScriptedTelemetrySource {
             }
             self.last_packet_id = frame.controls.physics_packet_id;
             return Ok(Some(frame.clone()));
+        }
+
+        Ok(None)
+    }
+
+    fn read_all_telemetry_frame(
+        &mut self,
+        _sample_tick: u64,
+        _timestamp_ns: u64,
+    ) -> TelemetryResult<Option<TelemetryFrame>> {
+        // Same as read_telemetry_frame but without packet-ID dedup.
+        // Every frame in the script is delivered regardless of packet_id.
+        if self.error_state {
+            return Err(TelemetryError::InvalidArgument(
+                "scripted shared memory disconnected".to_string(),
+            ));
+        }
+
+        if self.index >= self.steps.len() {
+            return Ok(None);
+        }
+
+        let has_error = self.current_step().and_then(|s| s.error.as_ref()).is_some();
+        if has_error {
+            self.error_state = true;
+            self.index += 1;
+            return Err(TelemetryError::InvalidArgument(
+                "scripted shared memory disconnected".to_string(),
+            ));
+        }
+
+        let step_status = self.current_step().and_then(|s| s.status);
+        let step_frame = self.current_step().and_then(|s| s.frame.clone());
+
+        self.index += 1;
+
+        if let Some(s) = step_status {
+            self.last_status = s;
+        }
+
+        if !self.last_status.is_live() {
+            return Ok(None);
+        }
+
+        if let Some(frame) = step_frame {
+            return Ok(Some(frame));
         }
 
         Ok(None)
