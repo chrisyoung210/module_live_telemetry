@@ -10,6 +10,8 @@
 //! 内置 calculated item 由用户通过 CLI 参数（`--ref-lap`）选择启用，
 //! 而非硬编码在启动流程中。
 
+use std::sync::{Arc, Mutex};
+
 use super::{ComputeContext, ComputeError, ComputeResult};
 use crate::item_key::{ItemKey, ItemType};
 use crate::TelemetryFrame;
@@ -44,6 +46,104 @@ pub trait BatchComputeItem: Send {
         current_lap: &[TelemetryFrame],
         reference_lap: &[TelemetryFrame],
     ) -> ComputeResult<Vec<f64>>;
+}
+
+// ---------------------------------------------------------------------------
+// Shared state for sector items
+// ---------------------------------------------------------------------------
+
+/// Shared state for previous-sector items (prev_sector_time / prev_sector_number).
+///
+/// Both `PrevSectorTimeItem` and `PrevSectorNumberItem` share the same
+/// `Arc<Mutex<SectorState>>` so that sector transition is detected once
+/// and both items report consistent values.
+pub struct SectorState {
+    pub last_seen_sector: i32,
+    pub prev_sector_time: f64,
+    pub prev_sector_number: f64,
+}
+
+impl Default for SectorState {
+    fn default() -> Self {
+        Self {
+            last_seen_sector: -1,
+            prev_sector_time: -1.0,
+            prev_sector_number: -1.0,
+        }
+    }
+}
+
+/// Shared state for per-sector best-time items.
+///
+/// The three `SectorBestItem` instances (indices 0, 1, 2) share the same
+/// `Arc<Mutex<SectorBestState>>` to track the best observed time for each
+/// sector across all valid laps in the session.
+pub struct SectorBestState {
+    pub last_seen_sector: i32,
+    pub best_times: [f64; 3],
+}
+
+impl Default for SectorBestState {
+    fn default() -> Self {
+        Self {
+            last_seen_sector: -1,
+            best_times: [-1.0, -1.0, -1.0],
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton item structs (RealtimeComputeItem not yet implemented)
+// ---------------------------------------------------------------------------
+
+pub struct PrevSectorTimeItem {
+    pub state: Arc<Mutex<SectorState>>,
+}
+
+pub struct PrevSectorNumberItem {
+    pub state: Arc<Mutex<SectorState>>,
+}
+
+pub struct SectorBestItem {
+    pub sector_index: usize,
+    pub state: Arc<Mutex<SectorBestState>>,
+}
+
+// ---------------------------------------------------------------------------
+// Factory functions
+// ---------------------------------------------------------------------------
+
+/// Create a pair of items that share the same `SectorState`.
+pub fn create_prev_sector_items() -> (PrevSectorTimeItem, PrevSectorNumberItem) {
+    let state = Arc::new(Mutex::new(SectorState::default()));
+    (
+        PrevSectorTimeItem {
+            state: Arc::clone(&state),
+        },
+        PrevSectorNumberItem {
+            state: Arc::clone(&state),
+        },
+    )
+}
+
+/// Create three `SectorBestItem` instances (indices 0, 1, 2)
+/// that share the same `SectorBestState`.
+pub fn create_sector_best_items() -> (SectorBestItem, SectorBestItem, SectorBestItem) {
+    let state = Arc::new(Mutex::new(SectorBestState::default()));
+    (
+        SectorBestItem {
+            sector_index: 0,
+            state: Arc::clone(&state),
+        },
+        SectorBestItem {
+            sector_index: 1,
+            state: Arc::clone(&state),
+        },
+        SectorBestItem {
+            sector_index: 2,
+            state: Arc::clone(&state),
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -354,5 +454,34 @@ mod tests {
         let mut item = DeltaTimeToSessionBestLap::new();
         let delta = item.compute(&ctx).unwrap();
         assert!((delta + 2000.0).abs() < 1.0); // 慢 2 秒
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 1: Factory function tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_prev_sector_items_share_state() {
+        let (time_item, number_item) = create_prev_sector_items();
+        // Both items must reference the exact same Arc allocation
+        assert!(Arc::ptr_eq(&time_item.state, &number_item.state));
+    }
+
+    #[test]
+    fn test_sector_best_items_share_state() {
+        let (s0, s1, s2) = create_sector_best_items();
+        assert!(Arc::ptr_eq(&s0.state, &s1.state));
+        assert!(Arc::ptr_eq(&s1.state, &s2.state));
+    }
+
+    #[test]
+    fn test_sector_best_state_initial_values() {
+        let (s0, s1, s2) = create_sector_best_items();
+        let state = s0.state.lock().unwrap();
+        assert_eq!(state.best_times, [-1.0, -1.0, -1.0]);
+        assert_eq!(state.last_seen_sector, -1);
+        // Verify s1 and s2 see the same locked state (same Arc)
+        let _ = s1;
+        let _ = s2;
     }
 }
