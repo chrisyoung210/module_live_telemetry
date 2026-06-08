@@ -407,6 +407,36 @@ pub fn all_builtin_calculated_items() -> Vec<BuiltinCalcItemEntry> {
             unit: Some("ms"),
             requires_reference: true,
         },
+        BuiltinCalcItemEntry {
+            key: ItemKey::new(ItemType::Calculated, "prev_sector_time"),
+            description: "上一个Sector耗时",
+            unit: Some("ms"),
+            requires_reference: false,
+        },
+        BuiltinCalcItemEntry {
+            key: ItemKey::new(ItemType::Calculated, "prev_sector_number"),
+            description: "上一个Sector编号",
+            unit: None,
+            requires_reference: false,
+        },
+        BuiltinCalcItemEntry {
+            key: ItemKey::new(ItemType::Calculated, "sector_best_1"),
+            description: "Sector1最佳耗时",
+            unit: Some("ms"),
+            requires_reference: false,
+        },
+        BuiltinCalcItemEntry {
+            key: ItemKey::new(ItemType::Calculated, "sector_best_2"),
+            description: "Sector2最佳耗时",
+            unit: Some("ms"),
+            requires_reference: false,
+        },
+        BuiltinCalcItemEntry {
+            key: ItemKey::new(ItemType::Calculated, "sector_best_3"),
+            description: "Sector3最佳耗时",
+            unit: Some("ms"),
+            requires_reference: false,
+        },
     ]
 }
 
@@ -530,7 +560,7 @@ mod tests {
     #[test]
     fn test_all_builtin_calculated_items() {
         let items = super::all_builtin_calculated_items();
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 7);
 
         let delta = items.iter().find(|i| i.key.to_string() == "calc:delta_time_to_life_best_lap").unwrap();
         assert_eq!(delta.description, "当前圈与历史最佳圈时间差");
@@ -539,6 +569,10 @@ mod tests {
         let session = items.iter().find(|i| i.key.to_string() == "calc:delta_time_to_session_best_lap").unwrap();
         assert_eq!(session.description, "当前圈与本Session最佳圈时间差");
         assert!(session.requires_reference);
+
+        let prev = items.iter().find(|i| i.key.to_string() == "calc:prev_sector_time").unwrap();
+        assert_eq!(prev.unit, Some("ms"));
+        assert!(!prev.requires_reference);
     }
 
     #[test]

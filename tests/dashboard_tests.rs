@@ -5,7 +5,13 @@
 
 use module_live_telemetry::{
     TelemetryFrame,
-    compute::{ComputeContext, ComputeResult, ComputeRegistry, items::RealtimeComputeItem},
+    compute::{
+        ComputeContext, ComputeResult, ComputeRegistry,
+        items::{
+            RealtimeComputeItem,
+            create_prev_sector_items, create_sector_best_items,
+        },
+    },
     dashboard::service::{DashboardService, DashboardCommand},
     dashboard::sink::ChannelSink,
     item_key::ItemKey,
@@ -36,6 +42,30 @@ fn make_frame(speed: f32) -> TelemetryFrame {
         powertrain: PowertrainSample::default(), session: SessionSample::default(),
         timing: TimingSample::default(), car_state: CarStateSample::default(),
         environment: EnvironmentSample::default(), other_cars: OtherCarsSample::default(),
+    }
+}
+
+fn make_sector_frame(sector_index: i32, is_valid_lap: i32, last_sector_time: i32, completed_laps: i32) -> TelemetryFrame {
+    TelemetryFrame {
+        sample_tick: 0, timestamp_ns: 0,
+        controls: ControlSample::default(),
+        motion: MotionSample::default(),
+        tyres: TyreSample::default(),
+        powertrain: PowertrainSample::default(),
+        session: SessionSample {
+            current_sector_index: sector_index,
+            is_valid_lap,
+            completed_laps,
+            normalized_car_position: sector_index as f32 / 3.0,
+            ..SessionSample::default()
+        },
+        timing: TimingSample {
+            last_sector_time,
+            ..TimingSample::default()
+        },
+        car_state: CarStateSample::default(),
+        environment: EnvironmentSample::default(),
+        other_cars: OtherCarsSample::default(),
     }
 }
 
@@ -129,4 +159,45 @@ fn unsubscribe_removes_item() {
 
     service.unsubscribe(&key);
     assert!(!service.is_subscribed(&key));
+}
+
+#[test]
+fn test_sector_items_end_to_end() {
+    let mut reg = ComputeRegistry::new();
+
+    // Register prev sector items (pair shares same SectorState)
+    let (prev_time, prev_num) = create_prev_sector_items();
+    reg.register_calc_realtime(Box::new(prev_time)).unwrap();
+    reg.register_calc_realtime(Box::new(prev_num)).unwrap();
+
+    // Register all 3 sector best items (share same SectorBestState)
+    let (s0, s1, s2) = create_sector_best_items();
+    reg.register_calc_realtime(Box::new(s0)).unwrap();
+    reg.register_calc_realtime(Box::new(s1)).unwrap();
+    reg.register_calc_realtime(Box::new(s2)).unwrap();
+
+    let (data_tx, data_rx) = bounded::<HashMap<String, f64>>(10);
+    let (frame_tx, frame_rx) = bounded::<Arc<TelemetryFrame>>(10);
+    let mut service = DashboardService::new(reg, Box::new(ChannelSink::new(data_tx)));
+
+    let key = ItemKey::parse("calc:prev_sector_time").unwrap();
+    service.subscribe(key.clone(), Duration::from_nanos(1), None).unwrap();
+
+    // Frame 1: sector 0, no transition yet (last_seen_sector = -1)
+    frame_tx.send(Arc::new(make_sector_frame(0, 1, 12000, 1))).unwrap();
+    // Frame 2: sector 1, transition 0→1, captures last_sector_time=25000
+    frame_tx.send(Arc::new(make_sector_frame(1, 1, 25000, 1))).unwrap();
+    drop(frame_tx);
+
+    let (_cmd_tx, cmd_rx) = bounded::<DashboardCommand>(1);
+    service.run(frame_rx, cmd_rx);
+
+    // Collect all output — expect 2 messages (one per frame)
+    let mut last_data = data_rx.recv().unwrap(); // first frame output
+    if let Ok(data) = data_rx.try_recv() {
+        last_data = data; // second frame output (with transition)
+    }
+
+    let val = last_data[&key.to_string()];
+    assert!((val - 25000.0).abs() < 0.01);
 }
