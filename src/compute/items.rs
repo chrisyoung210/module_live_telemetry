@@ -152,31 +152,81 @@ pub fn create_sector_best_items() -> (SectorBestItem, SectorBestItem, SectorBest
 
 impl RealtimeComputeItem for PrevSectorTimeItem {
     fn name(&self) -> &str {
-        unimplemented!()
+        "prev_sector_time"
     }
 
-    fn compute(&mut self, _ctx: &ComputeContext) -> ComputeResult<f64> {
-        unimplemented!()
+    fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
+        let mut state = self.state.lock().unwrap();
+        let current_sector_index = ctx.current_frame.session.current_sector_index;
+        let is_valid_lap = ctx.current_frame.session.is_valid_lap;
+        let last_sector_time = ctx.current_frame.timing.last_sector_time;
+
+        if current_sector_index != state.last_seen_sector && state.last_seen_sector != -1 {
+            state.prev_sector_time = last_sector_time as f64;
+            state.prev_sector_number = state.last_seen_sector as f64;
+            if is_valid_lap == 0 {
+                state.prev_sector_time = -1.0;
+            }
+        }
+
+        state.last_seen_sector = current_sector_index;
+        Ok(state.prev_sector_time)
     }
 }
 
 impl RealtimeComputeItem for PrevSectorNumberItem {
     fn name(&self) -> &str {
-        unimplemented!()
+        "prev_sector_number"
     }
 
-    fn compute(&mut self, _ctx: &ComputeContext) -> ComputeResult<f64> {
-        unimplemented!()
+    fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
+        let mut state = self.state.lock().unwrap();
+        let current_sector_index = ctx.current_frame.session.current_sector_index;
+        let is_valid_lap = ctx.current_frame.session.is_valid_lap;
+        let last_sector_time = ctx.current_frame.timing.last_sector_time;
+
+        if current_sector_index != state.last_seen_sector && state.last_seen_sector != -1 {
+            state.prev_sector_time = last_sector_time as f64;
+            state.prev_sector_number = state.last_seen_sector as f64;
+            if is_valid_lap == 0 {
+                state.prev_sector_time = -1.0;
+            }
+        }
+
+        state.last_seen_sector = current_sector_index;
+        Ok(state.prev_sector_number)
     }
 }
 
 impl RealtimeComputeItem for SectorBestItem {
     fn name(&self) -> &str {
-        unimplemented!()
+        match self.sector_index {
+            0 => "sector_best_1",
+            1 => "sector_best_2",
+            2 => "sector_best_3",
+            _ => unreachable!(),
+        }
     }
 
-    fn compute(&mut self, _ctx: &ComputeContext) -> ComputeResult<f64> {
-        unimplemented!()
+    fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
+        let mut state = self.state.lock().unwrap();
+        let current_sector = ctx.current_frame.session.current_sector_index;
+        let is_valid = ctx.current_frame.session.is_valid_lap;
+        let sec_time = ctx.current_frame.timing.last_sector_time;
+
+        if current_sector != state.last_seen_sector {
+            let completed = state.last_seen_sector;
+            if completed >= 0 && (completed as usize) < 3 && is_valid != 0 && sec_time > 0 {
+                let t = sec_time as f64;
+                let idx = completed as usize;
+                if state.best_times[idx] < 0.0 || t < state.best_times[idx] {
+                    state.best_times[idx] = t;
+                }
+            }
+            state.last_seen_sector = current_sector;
+        }
+
+        Ok(state.best_times[self.sector_index])
     }
 }
 
