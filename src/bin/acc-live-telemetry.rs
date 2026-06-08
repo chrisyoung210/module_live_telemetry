@@ -234,8 +234,13 @@ println!("connected to ACC shared memory");
                 .elapsed()
                 .as_nanos()
                 .min(u64::MAX as u128) as u64;
-            match active_reader.read_telemetry_frame(sample_tick, timestamp_ns) {
-                Ok(Some(frame)) => {
+            let read_result: TelemetryResult<module_live_telemetry::TelemetryFrame> = (|| {
+                let phys = active_reader.read_raw_physics()?;
+                let graph = active_reader.read_raw_graphics()?;
+                parse_raw_frame(sample_tick, timestamp_ns, &phys, &graph)
+            })();
+            match read_result {
+                Ok(frame) => {
                     let frame_arc = std::sync::Arc::new(frame);
                     // Distribute to dashboard (if active)
                     if let Some(ref dist) = dashboard_distributor {
@@ -247,7 +252,6 @@ println!("connected to ACC shared memory");
                     }
                     sample_tick = sample_tick.saturating_add(1);
                 }
-                Ok(None) => {}
                 Err(err) => {
                     if let Some(active_writer) = writer.take() {
                         let (_, summary) = active_writer.finish()?;
