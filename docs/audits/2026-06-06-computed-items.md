@@ -1,88 +1,88 @@
-# Computed Items System Audit Report
+# 计算项系统审计报告
 
-## Audit Baseline
+## 审计基线
 
-- Audit date: 2026-06-06
-- Current commit: `fc0b97aac8cb30e8b7ac7569400fb8436e67fb3e`
-- Scope: new functionality added after telemetry reader audit fixes, mainly the plan in `.sisyphus/plans/computed-items-system.md`
-- Focus areas:
+- 审计日期：2026-06-06
+- 当前提交：`fc0b97aac8cb30e8b7ac7569400fb8436e67fb3e`
+- 范围：遥测读取器审计修复后新增的功能，主要是 `.sisyphus/plans/computed-items-system.md` 中的计划
+- 关注区域：
   - `src/compute/*`
   - `src/dashboard/*`
   - `src/distributor.rs`
-  - `src/bin/acc-live-telemetry.rs` dashboard/serve integration
+  - `src/bin/acc-live-telemetry.rs` dashboard/serve 集成
   - `tests/compute_tests.rs`
   - `tests/dashboard_tests.rs`
 
-## User Clarification Captured During Audit
+## 审计期间获取的用户澄清
 
-The user clarified the expected design for realtime computed items:
+用户澄清了实时计算项的预期设计：
 
-- When an upstream caller needs a realtime computed item, the caller must pass all information required by that computation through parameters/context.
-- `compute_realtime` should not rely on hidden global state.
-- `compute_realtime` should not execute every registered realtime item merely because one subscribed item is due.
-- A fix for dashboard subscription scheduling must not reduce or filter the raw ACC shared-memory data recorded by `record` or `record-raw`.
+- 当上游调用方需要一个实时计算项时，调用方必须通过参数/上下文传递该计算所需的所有信息。
+- `compute_realtime` 不应依赖隐藏的全局状态。
+- `compute_realtime` 不应因为某一个订阅项到期就执行所有已注册的实时项。
+- 修复 dashboard 订阅调度时，不得减少或过滤 `record` 或 `record-raw` 记录的原始 ACC 共享内存数据。
 
-## Impact Assessment: Does Fixing Dashboard Scheduling Affect Recording Completeness?
+## 影响评估：修复 Dashboard 调度是否会影响录制完整性？
 
-No, not if the fix is kept inside the compute/dashboard path.
+不会，只要修复局限在 compute/dashboard 路径内就不会。
 
-`record` reads a full `TelemetryFrame` from ACC shared memory and writes that frame to `BinaryTelemetryWriter`:
+`record` 从 ACC 共享内存中读取完整的 `TelemetryFrame`，并将该帧写入 `BinaryTelemetryWriter`：
 
-- `src/bin/acc-live-telemetry.rs:201` reads `active_reader.read_telemetry_frame(...)`
-- `src/bin/acc-live-telemetry.rs:208` writes `active_writer.write_frame(frame)?`
+- `src/bin/acc-live-telemetry.rs:201` 读取 `active_reader.read_telemetry_frame(...)`
+- `src/bin/acc-live-telemetry.rs:208` 写入 `active_writer.write_frame(frame)?`
 
-The dashboard path is a side branch:
+Dashboard 路径是一个旁路分支：
 
-- `src/bin/acc-live-telemetry.rs:203` sends a clone to `TelemetryDistributor` only when `--dashboard` is enabled
+- `src/bin/acc-live-telemetry.rs:203` 仅在启用 `--dashboard` 时向 `TelemetryDistributor` 发送克隆副本
 
-Therefore, changing `DashboardService`/`ComputeRegistry` so they compute only the requested subscribed item does not change which ACC shared-memory fields are read or written to `.acctlm`.
+因此，修改 `DashboardService`/`ComputeRegistry` 使其仅计算所请求的订阅项，不会改变 ACC 共享内存中读取或写入 `.acctlm` 的字段内容。
 
-`record-raw` is even more separate. It writes raw physics and graphics pages directly:
+`record-raw` 则更加独立。它直接写入原始物理和图形页面：
 
-- `src/bin/acc-live-telemetry.rs:702` reads raw physics
-- `src/bin/acc-live-telemetry.rs:703` reads raw graphics
-- `src/bin/acc-live-telemetry.rs:706` to `src/bin/acc-live-telemetry.rs:709` writes tick, timestamp, physics bytes, graphics bytes
+- `src/bin/acc-live-telemetry.rs:702` 读取原始物理数据
+- `src/bin/acc-live-telemetry.rs:703` 读取原始图形数据
+- `src/bin/acc-live-telemetry.rs:706` 至 `src/bin/acc-live-telemetry.rs:709` 写入 tick、时间戳、物理字节、图形字节
 
-The compute/dashboard modules are not in the `record-raw` path.
+compute/dashboard 模块不在 `record-raw` 路径中。
 
-Important implementation guardrail: avoid changing the shared-memory reader to collect only fields needed by a computed item. Computed items should consume an already captured full `TelemetryFrame` or explicitly passed reference data. They should not decide what `record` records.
+重要实现护栏：避免修改共享内存读取器使其只采集计算项所需的字段。计算项应当消费已捕获的完整 `TelemetryFrame` 或显式传入的参考数据，而不是决定 `record` 录制什么内容。
 
-## Findings
+## 发现项
 
-### P1: CLI dashboard output is computed but discarded
+### P1：CLI dashboard 输出被计算后丢弃
 
-- Locations:
+- 位置：
   - `src/bin/acc-live-telemetry.rs:94`
   - `src/bin/acc-live-telemetry.rs:1224`
   - `src/dashboard/sink.rs:31`
-- Symptom:
-  - Both `record --dashboard` and `serve` create `(sink_tx, _sink_rx)`.
-  - `_sink_rx` is not stored, read, exposed, printed, or forwarded.
-  - `ChannelSink::send()` uses `try_send` and ignores errors.
-- Impact:
-  - DashboardService can receive frames and compute values, but no upstream program can observe the results.
-  - `serve` currently has no real data-service output.
-- Recommendation:
-  - Define the intended output surface first: stdout JSON lines, TCP, WebSocket, HTTP, plugin callback, or an in-process returned receiver.
-  - For a minimal CLI-safe fix, use a result consumer thread that reads `sink_rx` and prints newline-delimited JSON or a stable text format.
-  - Make send failures observable at least once per sink, instead of swallowing all errors silently.
-  - Add an integration test proving that the CLI/dashboard wiring produces a consumable `HashMap<String, f64>`.
+- 症状：
+  - `record --dashboard` 和 `serve` 都创建了 `(sink_tx, _sink_rx)`。
+  - `_sink_rx` 未被存储、读取、暴露、打印或转发。
+  - `ChannelSink::send()` 使用 `try_send` 并忽略错误。
+- 影响：
+  - DashboardService 可以接收帧并计算值，但没有上游程序可以观察到这些结果。
+  - `serve` 目前没有真正的数据服务输出。
+- 建议：
+  - 首先明确预期的输出界面：stdout JSON 行、TCP、WebSocket、HTTP、插件回调，或进程内返回的接收器。
+  - 对于最小化的 CLI 安全修复，使用一个结果消费线程读取 `sink_rx` 并打印换行分隔的 JSON 或稳定的文本格式。
+  - 使发送失败在每个 sink 上至少可观察一次，而不是静默吞掉所有错误。
+  - 添加一个集成测试，证明 CLI/dashboard 线路可以产生可消费的 `HashMap<String, f64>`。
 
-### P1: Dynamic realtime item `DeltaToBestLap` cannot run through the registry/dashboard path
+### P1：动态实时项 `DeltaToBestLap` 无法通过 registry/dashboard 路径运行
 
-- Locations:
+- 位置：
   - `src/compute/items.rs:106`
   - `src/compute/registry.rs:68`
   - `src/compute/registry.rs:111`
-- Symptom:
-  - `DeltaToBestLap::compute()` requires `ctx.reference_lap`.
-  - `ComputeRegistry::compute_realtime()` always passes `reference_lap: None`.
-  - `ComputeRegistry` has a `reference_cache`, but realtime computation does not use it.
-- Impact:
-  - The dynamic example item works only in unit tests that manually construct `ComputeContext::with_reference`.
-  - It cannot be used by `DashboardService` or `serve` as currently wired.
-- Recommendation:
-  - Introduce a realtime request/context object, for example:
+- 症状：
+  - `DeltaToBestLap::compute()` 需要 `ctx.reference_lap`。
+  - `ComputeRegistry::compute_realtime()` 始终传入 `reference_lap: None`。
+  - `ComputeRegistry` 有 `reference_cache`，但实时计算并未使用它。
+- 影响：
+  - 该动态示例项只能在手动构造 `ComputeContext::with_reference` 的单元测试中工作。
+  - 按当前线路连接，它无法被 `DashboardService` 或 `serve` 使用。
+- 建议：
+  - 引入一个实时请求/上下文对象，例如：
 
     ```rust
     pub struct RealtimeComputeRequest<'a> {
@@ -94,268 +94,268 @@ Important implementation guardrail: avoid changing the shared-memory reader to c
     }
     ```
 
-  - Add a method such as `compute_realtime_item(request) -> ComputeResult<f64>`.
-  - Let dashboard subscriptions optionally carry item-specific context, including `ReferenceSource`.
-  - If using `reference_cache`, resolve the reference lap explicitly from the subscription/request before invoking the item.
-  - Add an end-to-end dashboard test where `delta_to_best_lap` is subscribed with a reference lap and returns a value.
+  - 添加一个方法如 `compute_realtime_item(request) -> ComputeResult<f64>`。
+  - 让 dashboard 订阅可选地携带项特定上下文，包括 `ReferenceSource`。
+  - 如果使用 `reference_cache`，在调用项之前从订阅/请求中显式解析参考圈。
+  - 添加一个端到端 dashboard 测试，订阅 `delta_to_best_lap` 并传入参考圈，验证其返回一个值。
 
-### P2: Dashboard subscription scheduling currently executes all registered realtime items
+### P2：Dashboard 订阅调度目前执行所有已注册的实时项
 
-- Locations:
+- 位置：
   - `src/dashboard/service.rs:83`
   - `src/dashboard/service.rs:95`
   - `src/compute/registry.rs:71`
-- Symptom:
-  - `DashboardService` collects the names that are due in `items_to_compute`.
-  - It then calls `self.registry.compute_realtime(frame)`.
-  - `compute_realtime()` iterates over every registered realtime item, then Dashboard filters the resulting map.
-- Impact:
-  - Unsubscribed items still consume CPU.
-  - Unsubscribed stateful items still mutate their internal state.
-  - Unsubscribed failing items still emit errors.
-  - This violates the plan goal of sparse, on-demand results at per-item frequencies.
-- Recording impact:
-  - Fixing this does not affect `record` or `record-raw` recording completeness if the fix only changes compute/dashboard execution.
-  - The full `TelemetryFrame` should still be read and recorded before/independent of compute item selection.
-- Recommendation:
-  - Replace all-item execution with item-targeted execution:
+- 症状：
+  - `DashboardService` 在 `items_to_compute` 中收集到期的项名称。
+  - 然后调用 `self.registry.compute_realtime(frame)`。
+  - `compute_realtime()` 遍历每一个已注册的实时项，然后 Dashboard 过滤结果映射。
+- 影响：
+  - 未订阅的项仍然消耗 CPU。
+  - 未订阅的有状态项仍然修改其内部状态。
+  - 未订阅的失败项仍然产生错误。
+  - 这违反了计划中按项频率产生稀疏、按需结果的目标。
+- 录制影响：
+  - 如果修复仅改变 compute/dashboard 执行，则修复此问题不会影响 `record` 或 `record-raw` 的录制完整性。
+  - 完整的 `TelemetryFrame` 仍应在计算项选择之前/独立于计算项选择进行读取和录制。
+- 建议：
+  - 替换全部执行模式为按项定向执行：
 
     ```rust
     registry.compute_realtime_item(item_name, ctx)
     ```
 
-  - If computed items can depend on previously computed items, represent dependencies explicitly and evaluate only the required dependency closure in registration order.
-  - Make all item inputs explicit through a request/context parameter, matching the user clarification above.
-  - Add tests:
-    - Subscribe only item A; item B must not execute.
-    - Subscribe item A at 50 ms and item B at 200 ms; each must execute at its own cadence.
-    - A missing reference for `delta_to_best_lap` should fail only when that item is requested.
+  - 如果计算项可以依赖先前计算的结果，则显式表示依赖关系，并仅按注册顺序评估所需的依赖闭包。
+  - 通过请求/上下文参数将所有项输入显式化，与上述用户澄清保持一致。
+  - 添加测试：
+    - 仅订阅项 A；项 B 必须不执行。
+    - 以 50 毫秒频率订阅项 A，以 200 毫秒频率订阅项 B；每个项必须按自己的节奏执行。
+    - `delta_to_best_lap` 缺少参考数据时，应仅在请求该项时才失败。
 
-### P2: `record --dashboard` clones the whole `TelemetryFrame` on the 120 Hz hot path
+### P2：`record --dashboard` 在 120Hz 热路径上克隆整个 `TelemetryFrame`
 
-- Locations:
+- 位置：
   - `src/bin/acc-live-telemetry.rs:203`
   - `src/writer.rs:26`
   - `src/types.rs:337`
-- Symptom:
-  - `record` sends `frame.clone()` to the dashboard branch, then writes the original frame to disk.
-  - `TelemetryFrame` contains `OtherCarsSample`, which contains heap-backed vectors:
+- 症状：
+  - `record` 将 `frame.clone()` 发送到 dashboard 分支，然后将原始帧写入磁盘。
+  - `TelemetryFrame` 包含 `OtherCarsSample`，后者包含堆分配的向量：
     - `car_coordinates: Vec<f32>`
     - `car_id: Vec<i32>`
-- Impact:
-  - Every dashboard-enabled frame can allocate/copy vector data.
-  - At 120 Hz this may still be tolerable today, but it violates the intended zero-copy distribution direction and will get worse as consumers/items grow.
-- Recommendation:
-  - Change the hot path to share one frame allocation:
-    - Reader produces `TelemetryFrame`.
-    - Wrap it once in `Arc<TelemetryFrame>`.
-    - Dashboard clones the `Arc`.
-    - Writer encodes by borrowed reference, e.g. `write_frame_ref(&TelemetryFrame)`.
-  - Alternatively change `BinaryTelemetryWriter::write_frame` to accept `&TelemetryFrame` and clone only into its chunk buffer when strictly needed.
-  - Add a small benchmark or timing test around `record` dashboard distribution overhead.
+- 影响：
+  - 每个启用了 dashboard 的帧都可能分配/复制向量数据。
+  - 在 120Hz 下目前可能仍可承受，但这违反了预期的零拷贝分发方向，并且随着消费者/项的增多会变得更糟。
+- 建议：
+  - 修改热路径以共享单帧分配：
+    - 读取器产生 `TelemetryFrame`。
+    - 用 `Arc<TelemetryFrame>` 包装一次。
+    - Dashboard 克隆 `Arc`。
+    - 写入器通过借用引用编码，例如 `write_frame_ref(&TelemetryFrame)`。
+  - 或者修改 `BinaryTelemetryWriter::write_frame` 接受 `&TelemetryFrame`，仅在严格需要时克隆到其块缓冲区。
+  - 添加一个小型基准测试或计时测试来测量 `record` 的 dashboard 分派开销。
 
-### P2: Distributor drops the newest frame when a consumer is slow
+### P2：当消费者速度慢时 Distributor 丢弃最新帧
 
-- Locations:
+- 位置：
   - `src/distributor.rs:45`
   - `src/distributor.rs:145`
-- Symptom:
-  - Documentation implies old frames are dropped for slow consumers.
-  - Implementation uses bounded channel `try_send`.
-  - When full, crossbeam rejects the new frame, so old queued frames remain.
-- Impact:
-  - Dashboard can lag behind real telemetry because it processes stale queued frames while new frames are dropped.
-- Recommendation:
-  - Decide the desired policy:
-    - For dashboard/realtime view: prefer latest frame, drop old queued frames.
-    - For recorder/audit consumers: prefer lossless or explicit backpressure/error.
-  - For latest-frame dashboard behavior, use capacity 1 and replace stale content, or drain pending frames before sending the latest one.
-  - Update tests to assert the chosen policy.
+- 症状：
+  - 文档暗示慢消费者的旧帧会被丢弃。
+  - 实现使用有界通道 `try_send`。
+  - 当通道满时，crossbeam 拒绝新帧，因此旧的已排队帧得以保留。
+- 影响：
+  - Dashboard 会落后于真实遥测，因为它处理的是陈旧的排队帧，而新帧被丢弃。
+- 建议：
+  - 明确所需策略：
+    - 对于 dashboard/实时视图：优先保留最新帧，丢弃旧的排队帧。
+    - 对于录制器/审计消费者：优先无损或显式反压/错误。
+  - 对于需要最新帧的 dashboard 行为，使用容量 1 并替换陈旧内容，或在发送最新帧前排空待处理帧。
+  - 更新测试以断言所选策略。
 
-### P2: Dashboard thread failures are not observable by the producer
+### P2：Dashboard 线程故障对生产者不可观察
 
-- Locations:
+- 位置：
   - `src/dashboard/mod.rs:19`
   - `src/bin/acc-live-telemetry.rs:87`
   - `src/bin/acc-live-telemetry.rs:1229`
   - `src/distributor.rs:48`
-- Symptom:
-  - CLI stores the dashboard join handle in `_dashboard_handle` and never checks it.
-  - A panic in a callback sink or dashboard service kills the dashboard thread.
-  - The producer continues calling `try_send`, ignoring errors.
-- Impact:
-  - Dashboard can silently die while recording continues.
-  - This is acceptable only if dashboard is explicitly best-effort and documented as such.
-- Recommendation:
-  - Periodically check `JoinHandle::is_finished()` in long-running CLI loops.
-  - Send dashboard errors to a small error channel and log them from the main loop.
-  - Remove or mark disconnected distributor senders to avoid repeated silent failures.
+- 症状：
+  - CLI 将 dashboard join handle 存储在 `_dashboard_handle` 中，从不检查。
+  - 回调 sink 或 dashboard 服务中的 panic 会杀死 dashboard 线程。
+  - 生产者继续调用 `try_send`，忽略错误。
+- 影响：
+  - Dashboard 可能静默死亡，而录制继续进行。
+  - 仅在 dashboard 被明确标记为尽力而为并记录在案时才可接受。
+- 建议：
+  - 在长时间运行的 CLI 循环中定期检查 `JoinHandle::is_finished()`。
+  - 将 dashboard 错误发送到一个小型错误通道，并从主循环中记录日志。
+  - 移除或标记已断开的 distributor 发送器以避免重复的静默失败。
 
-### P2: `DeltaToBestLap` search algorithm has unused variable and does not handle backward position movement
+### P2：`DeltaToBestLap` 搜索算法存在未使用变量且未处理位置后移
 
-- Locations:
-  - `src/compute/items.rs:124` to `src/compute/items.rs:134`
-- Symptom:
-  - `let _ref_pos = reference[i].session.normalized_car_position;` computes the reference position but never uses it.
-  - The linear scan `for i in self.index..reference.len()` assumes `normalized_car_position` monotonically increases. If the car spins, goes off track, or moves backward, the position value can decrease. Starting the scan from `self.index` may skip valid earlier reference points or fall through to the error branch.
-- Impact:
-  - When the car position decreases relative to the previous frame, the algorithm returns an incorrect delta or fails with `ComputationFailed("无法在参考圈中找到对应位置")`.
-  - This is a correctness defect in the dynamic example item that will manifest during real on-track incidents.
-- Recommendation:
-  - Remove the unused `_ref_pos` binding or use it to validate `current_pos >= ref_pos` when selecting the match interval.
-  - Handle position regression: if `current_pos < reference[self.index].session.normalized_car_position`, reset `self.index` to 0 or scan backward before proceeding.
-  - Add unit tests for backward movement and position-reset scenarios.
+- 位置：
+  - `src/compute/items.rs:124` 至 `src/compute/items.rs:134`
+- 症状：
+  - `let _ref_pos = reference[i].session.normalized_car_position;` 计算了参考位置但从未使用。
+  - 线性扫描 `for i in self.index..reference.len()` 假设 `normalized_car_position` 单调递增。如果赛车旋转、冲出赛道或向后移动，位置值可能下降。从 `self.index` 开始扫描可能跳过有效的早期参考点，或落入错误分支。
+- 影响：
+  - 当赛车位置相对于前帧下降时，算法返回不正确的差值，或因 `ComputationFailed("无法在参考圈中找到对应位置")` 而失败。
+  - 这是动态示例项中的一个正确性缺陷，会在真实赛道事件中显现。
+- 建议：
+  - 移除未使用的 `_ref_pos` 绑定，或使用它来在选择匹配区间时验证 `current_pos >= ref_pos`。
+  - 处理位置回退：如果 `current_pos < reference[self.index].session.normalized_car_position`，在继续扫描前将 `self.index` 重置为 `0` 或向后扫描。
+  - 添加针对向后移动和位置重置场景的单元测试。
 
-### P2: `DashboardService` advances schedule even for failed computations
+### P2：`DashboardService` 即使计算失败仍推进调度
 
-- Locations:
-  - `src/dashboard/service.rs:117` to `src/dashboard/service.rs:120`
-- Symptom:
-  - In `run()`, `next_schedule` is updated to `now + interval` for every name in `items_to_compute`.
-  - This happens regardless of whether the item was found in `all_results` (e.g., the item failed or was not registered).
-- Impact:
-  - If a subscribed item fails (e.g., `DeltaToBestLap` with no reference data), the consumer waits a full interval before the next attempt, and the failure is invisible.
-  - If an item name is misspelled during subscription, `all_results.get(name)` returns `None`, but the schedule is still advanced, causing the subscription to spin uselessly on every cycle.
-- Recommendation:
-  - Only advance `next_schedule` when computation succeeds and produces a result.
-  - For failures, keep the previous schedule time (or use a shorter retry backoff) so the consumer can observe recovery.
-  - Alternatively, change the sink protocol to include success/failure status so consumers can observe errors.
+- 位置：
+  - `src/dashboard/service.rs:117` 至 `src/dashboard/service.rs:120`
+- 症状：
+  - 在 `run()` 中，`next_schedule` 对 `items_to_compute` 中的每个名称更新为 `now + interval`。
+  - 无论该项是否在 `all_results` 中找到（例如项失败或未注册），都会发生此更新。
+- 影响：
+  - 如果订阅项失败（例如 `DeltaToBestLap` 没有参考数据），消费者要等待完整间隔才能再次尝试，且失败不可见。
+  - 如果订阅时项名称拼写错误，`all_results.get(name)` 返回 `None`，但调度仍然被推进，导致订阅在每个周期无意义地空转。
+- 建议：
+  - 仅当计算成功并产生结果时才推进 `next_schedule`。
+  - 对于失败，保留之前的调度时间（或使用更短的重试退避），以便消费者可以观察到恢复。
+  - 或者修改 sink 协议以包含成功/失败状态，使消费者能够观察到错误。
 
-### P2: `CallbackSink` callback panic kills the dashboard thread without observation
+### P2：`CallbackSink` 回调 panic 在未被观察到的情况下杀死 dashboard 线程
 
-- Locations:
-  - `src/dashboard/sink.rs:70` to `src/dashboard/sink.rs:72`
-- Symptom:
-  - `CallbackSink::send()` calls `(self.callback)(data)` directly with no `std::panic::catch_unwind` guard.
-- Impact:
-  - Any panic in the callback unwinds through `DashboardService::run()`, killing the entire dashboard thread.
-  - Because the CLI never checks the join handle (see P2 above), a bad callback silently and permanently disables the dashboard.
-- Recommendation:
-  - Wrap the callback invocation in `catch_unwind` and log/report the panic through an error channel instead of unwinding.
-  - Alternatively, change `DataSink::send` to return a `Result` so `DashboardService` can handle send failures gracefully.
+- 位置：
+  - `src/dashboard/sink.rs:70` 至 `src/dashboard/sink.rs:72`
+- 症状：
+  - `CallbackSink::send()` 直接调用 `(self.callback)(data)`，没有 `std::panic::catch_unwind` 保护。
+- 影响：
+  - 回调中的任何 panic 都会通过 `DashboardService::run()` 向上展开，杀死整个 dashboard 线程。
+  - 因为 CLI 从不检查 join handle（见上文 P2），一个错误的回调会静默且永久地禁用 dashboard。
+- 建议：
+  - 用 `catch_unwind` 包装回调调用，并通过错误通道记录/报告 panic，而不是向上展开。
+  - 或者修改 `DataSink::send` 返回 `Result`，使 `DashboardService` 能够优雅地处理发送失败。
 
-### P2: `ComputeRegistry::reference_cache` has no memory bounds or eviction
+### P2：`ComputeRegistry::reference_cache` 没有内存约束或淘汰机制
 
-- Locations:
+- 位置：
   - `src/compute/registry.rs:20`
-  - `src/compute/registry.rs:112` to `src/compute/registry.rs:119`
-- Symptom:
-  - `reference_cache` is a `HashMap<ReferenceSource, Vec<TelemetryFrame>>`.
-  - Each entry stores an entire lap of frames (potentially thousands of frames × size of `TelemetryFrame`).
-  - `cache_reference_lap` allows insertion, but there is no size limit, TTL, or LRU eviction.
-- Impact:
-  - In a long-running `serve` or dashboard process, memory usage can grow without bound as new reference laps are loaded.
-- Recommendation:
-  - Add a maximum cache entry limit (e.g., `MAX_CACHE_ENTRIES`).
-  - Or replace the `HashMap` with an LRU cache (e.g., `lru` crate) or a cache with TTL.
-  - Expose `clear_reference_cache()` or `evict_reference(source)` API for explicit management.
+  - `src/compute/registry.rs:112` 至 `src/compute/registry.rs:119`
+- 症状：
+  - `reference_cache` 是 `HashMap<ReferenceSource, Vec<TelemetryFrame>>`。
+  - 每个条目存储一整圈的帧（可能有数千帧 × `TelemetryFrame` 的大小）。
+  - `cache_reference_lap` 允许插入，但没有大小限制、TTL 或 LRU 淘汰。
+- 影响：
+  - 在长时间运行的 `serve` 或 dashboard 进程中，随着新参考圈的加载，内存使用会无限制增长。
+- 建议：
+  - 添加最大缓存条目限制（例如 `MAX_CACHE_ENTRIES`）。
+  - 或用 LRU 缓存（如 `lru` 库）或带 TTL 的缓存替换 `HashMap`。
+  - 暴露 `clear_reference_cache()` 或 `evict_reference(source)` API 供显式管理。
 
-### P3: `subscribe()` accepts unknown item names silently
+### P3：`subscribe()` 静默接受未知项名称
 
-- Location:
+- 位置：
   - `src/dashboard/service.rs:57`
-- Symptom:
-  - The comment says item names must be registered.
-  - The method does not check registration and returns `()`.
-- Impact:
-  - A typo creates a subscription that never emits data and produces no error.
-- Recommendation:
-  - Change signature to `subscribe(...) -> ComputeResult<()>`.
-  - Return `ComputeError::ItemNotFound(name)` when the item is not registered.
-  - Add a unit test for unknown subscription names.
+- 症状：
+  - 注释说项名称必须已注册。
+  - 方法不检查注册情况，直接返回 `()`。
+- 影响：
+  - 一个拼写错误会创建一个从不发出数据且不产生错误的订阅。
+- 建议：
+  - 将签名改为 `subscribe(...) -> ComputeResult<()>`。
+  - 当项未注册时返回 `ComputeError::ItemNotFound(name)`。
+  - 添加针对未知订阅名称的单元测试。
 
-### P3: Test files added for integration are placeholders
+### P3：为集成测试添加的测试文件是占位符
 
-- Locations:
+- 位置：
   - `tests/compute_tests.rs:1`
   - `tests/dashboard_tests.rs:1`
-- Symptom:
-  - Both files contain only comments.
-  - Most tests live inside module `#[cfg(test)]` blocks.
-- Impact:
-  - Current tests cover isolated module behavior but not external API shape or CLI/dashboard wiring.
-- Recommendation:
-  - Add real integration tests for public API behavior:
-    - registry item-targeted realtime computation
-    - dashboard result output through a real receiver
-    - unknown subscriptions
-    - slow consumer policy
-    - dynamic item with reference data
+- 症状：
+  - 两个文件仅包含注释。
+  - 大多数测试位于模块 `#[cfg(test)]` 块中。
+- 影响：
+  - 当前测试覆盖了孤立的模块行为，但不覆盖外部 API 形态或 CLI/dashboard 线路。
+- 建议：
+  - 为公共 API 行为添加真正的集成测试：
+    - registry 按项定向实时计算
+    - dashboard 结果通过真实接收器输出
+    - 未知订阅
+    - 慢消费者策略
+    - 带参考数据的动态项
 
-### P3: `TelemetryDistributor` documentation contradicts actual behavior
+### P3：`TelemetryDistributor` 文档与实际行为矛盾
 
-- Location:
+- 位置：
   - `src/distributor.rs:38`
-- Symptom:
-  - The doc comment on `TelemetryDistributor::new()` states: "如果消费者处理速度跟不上，旧帧将被丢弃。"
-  - The implementation uses `crossbeam_channel::bounded` with `try_send`. When the channel is full, `try_send` returns `Err`, meaning the **newest frame is dropped**, while old queued frames remain.
-  - The unit test `test_overflow_drops_old` correctly asserts that frame 3 (new) is dropped and frames 1/2 (old) are kept.
-- Impact:
-  - Users expect the dashboard to receive the latest frame, but it actually processes stale queued frames while discarding newer ones.
-  - This is a documentation/expectation mismatch that can mislead consumers and hide latency problems.
-- Recommendation:
-  - Update the doc comment to match the actual crossbeam `try_send` behavior (newest frame dropped when full).
-  - Or (preferred) change the implementation to prefer the latest frame, aligning the behavior with the documented intent.
+- 症状：
+  - `TelemetryDistributor::new()` 的文档注释称："如果消费者处理速度跟不上，旧帧将被丢弃。"
+  - 实现使用 `crossbeam_channel::bounded` 配合 `try_send`。当通道满时，`try_send` 返回 `Err`，意味着**最新帧被丢弃**，而旧的排队帧得以保留。
+  - 单元测试 `test_overflow_drops_old` 正确断言帧 3（新）被丢弃，帧 1/2（旧）被保留。
+- 影响：
+  - 用户期望 dashboard 收到最新帧，但它实际处理陈旧的排队帧，同时丢弃较新的帧。
+  - 这是一个文档/预期不匹配问题，可能误导消费者并隐藏延迟问题。
+- 建议：
+  - 更新文档注释以匹配实际的 crossbeam `try_send` 行为（满时丢弃最新帧）。
+  - 或（更推荐）修改实现以优先保留最新帧，使行为与文档意图一致。
 
-### P3: Errors in `compute_realtime` are only emitted via `eprintln!`
+### P3：`compute_realtime` 中的错误仅通过 `eprintln!` 输出
 
-- Location:
-  - `src/compute/registry.rs:84` to `src/compute/registry.rs:88`
-- Symptom:
-  - `ComputeRegistry::compute_realtime()` prints failures to stderr with `eprintln!("compute item '{}' failed: {err}; skipping", item.name())`.
-  - The returned `HashMap` simply omits the failed item.
-- Impact:
-  - Programmatic callers (e.g., `DashboardService`) cannot distinguish between "item not subscribed" and "item failed to compute."
-  - Production monitoring, alerting, and graceful degradation are impossible because failures are invisible to the API.
-- Recommendation:
-  - Include error information in the return value, for example `HashMap<String, ComputeResult<f64>>`, or maintain a parallel error log.
-  - Or adopt the `compute_realtime_item` API (see P1 above) so callers receive typed errors directly.
+- 位置：
+  - `src/compute/registry.rs:84` 至 `src/compute/registry.rs:88`
+- 症状：
+  - `ComputeRegistry::compute_realtime()` 用 `eprintln!("compute item '{}' failed: {err}; skipping", item.name())` 将失败打印到 stderr。
+  - 返回的 `HashMap` 直接省略失败项。
+- 影响：
+  - 编程调用者（如 `DashboardService`）无法区分"项未订阅"和"项计算失败"。
+  - 生产监控、告警和优雅降级无法实现，因为失败对 API 不可见。
+- 建议：
+  - 在返回值中包含错误信息，例如 `HashMap<String, ComputeResult<f64>>`，或维护并行的错误日志。
+  - 或采用 `compute_realtime_item` API（见上文 P1），让调用者直接接收类型化错误。
 
-### P3: `DashboardService::run()` uses frame arrival time as schedule baseline causing drift
+### P3：`DashboardService::run()` 使用帧到达时间作为调度基线导致漂移
 
-- Locations:
+- 位置：
   - `src/dashboard/service.rs:87`
-  - `src/dashboard/service.rs:117` to `src/dashboard/service.rs:119`
-- Symptom:
-  - `now = Instant::now()` is captured when the frame arrives.
-  - `next_schedule` is set to `now + interval`.
-  - If frame processing and computation take time `dt`, the actual interval becomes `interval + dt`, and this drift accumulates across iterations.
-- Impact:
-  - High-frequency subscriptions (e.g., 50 ms) gradually deviate from the target cadence under load.
-- Recommendation:
-  - Update schedule based on the previous scheduled time: `next_schedule[name] += interval` instead of `now + interval`.
-  - Or, when `now` is significantly later than `next_schedule + interval`, choose whether to catch up or skip missed intervals.
+  - `src/dashboard/service.rs:117` 至 `src/dashboard/service.rs:119`
+- 症状：
+  - `now = Instant::now()` 在帧到达时捕获。
+  - `next_schedule` 设置为 `now + interval`。
+  - 如果帧处理与计算耗时 `dt`，实际间隔变为 `interval + dt`，此漂移在多次迭代中累积。
+- 影响：
+  - 高频订阅（如 50 毫秒）在负载下逐渐偏离目标节奏。
+- 建议：
+  - 基于上一次调度时间更新：`next_schedule[name] += interval`，而不是 `now + interval`。
+  - 或当 `now` 明显晚于 `next_schedule + interval` 时，选择是追赶还是跳过错过的间隔。
 
-### P3: `serve_command` lacks graceful shutdown
+### P3：`serve_command` 缺少优雅关闭
 
-- Location:
-  - `src/bin/acc-live-telemetry.rs:1210` onward
-- Symptom:
-  - `serve` runs an infinite loop with no signal handling (SIGINT/SIGTERM).
-  - On exit, the dashboard thread is not joined and resources are not explicitly flushed.
-- Impact:
-  - When the process is forcefully terminated, the dashboard thread may be left in an inconsistent state.
-  - If dashboard later acquires persistent state, data loss could occur.
-- Recommendation:
-  - Add a simple Ctrl+C handler (e.g., using the `ctrlc` crate) to set a shutdown flag.
-  - On shutdown, drop the distributor sender so the dashboard receiver disconnects, then `join` the dashboard handle before exiting.
+- 位置：
+  - `src/bin/acc-live-telemetry.rs:1210` 起
+- 症状：
+  - `serve` 运行无限循环，没有信号处理（SIGINT/SIGTERM）。
+  - 退出时，dashboard 线程未被 join，资源未被显式刷新。
+- 影响：
+  - 当进程被强制终止时，dashboard 线程可能处于不一致状态。
+  - 如果 dashboard 后续获得持久状态，可能发生数据丢失。
+- 建议：
+  - 添加简单的 Ctrl+C 处理（如使用 `ctrlc` 库）来设置关闭标志。
+  - 在关闭时，丢弃 distributor 发送器使 dashboard 接收器断开连接，然后在退出前 `join` dashboard handle。
 
-## Recommended Fix Order
+## 建议修复顺序
 
-1. Close the dashboard output loop for `serve`/`record --dashboard`; make results observable.
-2. Redesign realtime compute execution around explicit request/context parameters.
-3. Make `DashboardService` execute only due subscribed items, plus explicit dependencies if needed.
-4. Add reference-lap injection for dynamic realtime items.
-5. Remove full-frame clone from the hot path or benchmark it and document the accepted cost.
-6. Choose and implement a distributor overflow policy suitable for realtime dashboard data.
-7. Fix `DeltaToBestLap` search robustness for backward position movement.
-8. Prevent `CallbackSink` panic from killing the dashboard thread.
-9. Add memory bounds or eviction to `reference_cache`.
-10. Add integration tests for the end-to-end behavior rather than only module-local tests.
+1. 闭合 `serve`/`record --dashboard` 的 dashboard 输出回路；使结果可观察。
+2. 围绕显式请求/上下文参数重新设计实时计算执行。
+3. 使 `DashboardService` 仅执行到期的订阅项，必要时加上显式依赖。
+4. 为动态实时项添加参考圈注入。
+5. 从热路径中移除完整帧克隆，或对其进行基准测试并记录可接受的成本。
+6. 选择并实现适合实时 dashboard 数据的 distributor 溢出策略。
+7. 修复 `DeltaToBestLap` 搜索对位置后移的鲁棒性。
+8. 防止 `CallbackSink` panic 杀死 dashboard 线程。
+9. 为 `reference_cache` 添加内存约束或淘汰机制。
+10. 为端到端行为添加集成测试，而非仅模块局部测试。
 
-## Suggested API Direction
+## 建议的 API 方向
 
-The following shape matches the clarified requirement that all required data be passed by the caller:
+以下形态符合澄清后的需求（所有必需数据由调用方传入）：
 
 ```rust
 pub struct RealtimeComputeRequest<'a> {
@@ -371,15 +371,15 @@ impl ComputeRegistry {
         &mut self,
         request: RealtimeComputeRequest<'_>,
     ) -> ComputeResult<f64> {
-        // Find exactly request.item_name.
-        // Build ComputeContext from the request.
-        // Execute only that item.
-        // Return its result or a typed error.
+        // 精确查找 request.item_name。
+        // 从 request 构建 ComputeContext。
+        // 仅执行该项。
+        // 返回其结果或类型化错误。
     }
 }
 ```
 
-For dashboard scheduling:
+对于 dashboard 调度：
 
 ```rust
 pub struct Subscription {
@@ -389,150 +389,11 @@ pub struct Subscription {
 }
 ```
 
-Dashboard should build a request per due subscription. If a reference lap is needed, it should resolve it explicitly and pass it into the request.
+Dashboard 应为每个到期订阅构建一个请求。如果需要参考圈，应显式解析并传入请求中。
 
-## Verification Performed
+## 已执行的验证
 
-During this audit session, the following commands were run successfully before writing this report:
-
-```powershell
-cargo test
-cargo check --all-targets
-cargo clippy --all-targets -- -D warnings
-```
-
-Results:
-
-- `cargo test`: passed
-- `cargo check --all-targets`: passed
-- `cargo clippy --all-targets -- -D warnings`: passed
-
-## Final Completion Record
-
-All code fixes for the issues documented in this computed-items audit report were completed in commit:
-
-- `b6f8436cebc68d02e188eb01a51ce7e0d4079187` (`fix(dashboard): complete computed items audit fixes`)
-
-This includes the final R1 re-review correction for `DeltaToBestLap` position backtracking.
-
-## Completion Commit
-
-The code fixes for the remaining issues in this audit report were completed in:
-
-- `b6f8436cebc68d02e188eb01a51ce7e0d4079187` (`fix(dashboard): complete computed items audit fixes`)
-
-This commit includes the dashboard/compute/distributor/writer/test changes that close the audit items documented above, including the R1 re-review fix for `DeltaToBestLap` position backtracking.
-
-Passing tests do not cover the P1/P2 integration issues above.
-
-## Fix Log (2026-06-06)
-
-All findings from this audit have been addressed. Each entry records the fix applied.
-
-### P1: CLI dashboard output is computed but discarded
-
-**Fix**: `DataSink::send()` changed to return `Result<(), SendError>` with typed `SendError` enum. CLI (`record --dashboard` and `serve`) now spawn a background thread reading `sink_rx` and printing results as `DASHBOARD speed_mps=27.7778` to stdout. `DashboardService` reports first send failure to stderr.
-
-### P1: `DeltaToBestLap` cannot run through registry/dashboard path
-
-**Fix**: Introduced `RealtimeComputeRequest<'a>` (in `context.rs`) carrying all computation inputs explicitly. Added `ComputeRegistry::compute_realtime()` overload taking `(name: &str, request: &RealtimeComputeRequest<'_>) -> ComputeResult<f64>` for per-item computation. Added `resolve_reference_lap()` with auto-load from `.acctlm` file when cache misses (Scheme B). Extended `DashboardService::subscribe()` to accept `Option<ReferenceSource>`. `run()` now builds per-item `RealtimeComputeRequest` with resolved reference lap. Conversion of `reference_cache` to `Arc<Vec<TelemetryFrame>>` avoids borrow conflicts.
-
-### P2: Dashboard subscription scheduling executes all registered items
-
-**Fix**: `DashboardService::run()` now calls `registry.compute_realtime(name, &request)` for each due item individually instead of `registry.compute_realtime(frame)` which executed all items. Only subscribed, due items are computed.
-
-### P2: `record --dashboard` clones `TelemetryFrame` on 120 Hz hot path
-
-**Fix**: `TelemetryDistributor::distribute()` now accepts `Arc<TelemetryFrame>` instead of `TelemetryFrame`. `BinaryTelemetryWriter::write_frame()` now accepts `&TelemetryFrame` (clones internally). `record_command` wraps frame in `Arc` once and shares between dashboard and writer.
-
-### P2: Distributor drops newest frame; doc contradicts behavior
-
-**Fix**: Updated `TelemetryDistributor::new()` doc from "旧帧将被丢弃" to "满时新帧被丢弃". Changed dashboard consumer capacity from 64 to 1 to minimize stale frame accumulation. Renamed test to `test_overflow_drops_new`.
-
-### P2: Dashboard thread failures not observable
-
-**Fix**: `_dashboard_handle` promoted to `dashboard_handle` with type annotation. Added `dashboard_dead` flag. `record_command` loop now checks `handle.is_finished()` every iteration; on death, disables distributor and prints warning.
-
-### P2: `DeltaToBestLap` unused `_ref_pos`
-
-**Fix**: Removed the unused `let _ref_pos = ...` line. Added comment clarifying that position back-tracking does not affect time delta computation.
-
-### P2: `DashboardService` advances schedule for failed computations
-
-**Fix**: Moved `next_schedule` update into `Ok` branch of `compute_realtime` match. Failed items retry on the next frame without waiting the full interval.
-
-### P2: `CallbackSink` panic kills dashboard thread
-
-**Fix**: `CallbackSink::send()` now wraps callback invocation in `std::panic::catch_unwind`. On panic, logs the message and returns `Ok(())`, keeping the dashboard thread alive.
-
-### P2: `reference_cache` has no memory bounds
-
-**Fix**: Added `MAX_CACHE_ENTRIES = 4`. `cache_reference_lap()` and `resolve_reference_lap()` both evict an existing entry before inserting when cache is full and key is new.
-
-### P3: `subscribe()` accepts unknown item names silently
-
-**Fix**: `DashboardService::subscribe()` now returns `ComputeResult<()>`. Validates `self.registry.is_registered(&item_name)` before inserting; returns `ComputeError::ItemNotFound` for unknown names. Added integration test `subscribe_unknown_item_returns_error`.
-
-### P3: Test files are placeholders
-
-**Fix**: Filled `tests/compute_tests.rs` with 3 integration tests (per-item computation, not-found error, cache eviction). Filled `tests/dashboard_tests.rs` with 3 integration tests (unknown subscription error, successful subscription, end-to-end data flow).
-
-### P3: Distributor documentation contradicts behavior
-
-**Fix**: See P2 fix above (doc updated, capacity reduced to 1).
-
-### P3: Errors in `compute_realtime` only via `eprintln!`
-
-**Fix**: Partially addressed — `DashboardService::run()` now uses `compute_realtime(name, &request)` which returns `ComputeResult<f64>`, making errors observable to callers. The legacy `compute_realtime(frame)` retains `eprintln!` for backward compatibility.
-
-### P3: Schedule baseline uses frame arrival time causing drift
-
-**Fix**: `DashboardService::run()` now uses `prev + interval` (previous scheduled time as baseline) instead of `now + interval` (frame arrival time as baseline), preventing cumulative drift.
-
-### P3: `serve_command` lacks graceful shutdown
-
-**Fix**: Added `ctrlc` dependency. `serve_command` registers a Ctrl+C handler that sets an `AtomicBool`. Main loop changed from `loop {` to `while running.load(SeqCst) {`. On shutdown, drops the distributor (disconnects dashboard receiver naturally), joins dashboard handle, and exits cleanly.
-
-### Verification (post-fix)
-
-```powershell
-cargo test               # 41 tests pass (30 unit + 3 binary_roundtrip + 3 compute_tests + 3 dashboard_tests + 2 binary_roundtrip)
-cargo check --all-targets # pass
-cargo clippy --all-targets -- -D warnings # pass
-```
-
-## Re-review Finding (2026-06-06)
-
-### R1: `DeltaToBestLap` backtracking fix is incomplete
-
-- Location:
-  - `src/compute/items.rs:108` to `src/compute/items.rs:116`
-- Symptom:
-  - The fix log states the `DeltaToBestLap` robustness issue was addressed.
-  - The code only removed the unused `_ref_pos` binding and added a comment.
-  - The algorithm still starts scanning from `self.index` even when the current car position has moved backward relative to the previously matched reference point.
-- Concrete failure mode:
-  - Reference positions: `0.0 -> 0.5 -> 1.0`.
-  - First frame at current position `0.8` sets `self.index = 1`.
-  - A later frame in the same lap at current position `0.4` still scans from index `1`.
-  - It returns reference time at `0.5`, but the correct segment is before `0.5`, so it should reset/search from index `0`.
-- Impact:
-  - Backing up, sliding backward, or any position regression within the same lap can produce an incorrect time delta.
-- Required fix:
-  - If `current_pos` is less than `reference[self.index].session.normalized_car_position`, reset `self.index` to `0` before scanning.
-  - Add a unit test that first advances the index, then feeds a lower `normalized_car_position` in the same lap and verifies the earlier reference point is used.
-
-## Re-review Fix Log (2026-06-06)
-
-### R1: `DeltaToBestLap` backtracking fix completed
-
-**Fix**:
-
-- Updated `DeltaToBestLap::compute()` so that if the current normalized position moves backward relative to the previously matched reference index, `self.index` is reset to `0` before scanning.
-- This prevents the algorithm from matching against a later reference segment after backing up/sliding backward in the same lap.
-- Added unit test `test_delta_to_best_lap_resets_index_on_position_backtrack`.
-
-**Verification**:
+在本次审计会话中，编写此报告之前已成功运行以下命令：
 
 ```powershell
 cargo test
@@ -540,16 +401,155 @@ cargo check --all-targets
 cargo clippy --all-targets -- -D warnings
 ```
 
-Results:
+结果：
 
-- `cargo test`: passed
-- `cargo check --all-targets`: passed
-- `cargo clippy --all-targets -- -D warnings`: passed
+- `cargo test`：通过
+- `cargo check --all-targets`：通过
+- `cargo clippy --all-targets -- -D warnings`：通过
 
-## Final Completion Record
+## 最终完成记录
 
-All code fixes for the issues documented in this computed-items audit report were completed in commit:
+本计算项审计报告中记录的所有问题的代码修复已在以下提交中完成：
 
 - `b6f8436cebc68d02e188eb01a51ce7e0d4079187` (`fix(dashboard): complete computed items audit fixes`)
 
-This includes the final R1 re-review correction for `DeltaToBestLap` position backtracking.
+其中包括针对 `DeltaToBestLap` 位置回退的最终 R1 复审修正。
+
+## 完成提交
+
+本审计报告中剩余问题的代码修复已在以下提交中完成：
+
+- `b6f8436cebc68d02e188eb01a51ce7e0d4079187` (`fix(dashboard): complete computed items audit fixes`)
+
+此提交包含 dashboard/compute/distributor/writer/test 的变更，闭合了上述审计项，包括针对 `DeltaToBestLap` 位置回退的 R1 复审修复。
+
+通过的测试不覆盖上述 P1/P2 集成问题。
+
+## 修复日志 (2026-06-06)
+
+本审计中的所有发现项均已处理。每一条记录对应修复内容。
+
+### P1：CLI dashboard 输出被计算后丢弃
+
+**修复**：`DataSink::send()` 改为返回 `Result<(), SendError>`，附带类型化 `SendError` 枚举。CLI（`record --dashboard` 和 `serve`）现在生成一个后台线程读取 `sink_rx` 并将结果以 `DASHBOARD speed_mps=27.7778` 格式打印到 stdout。`DashboardService` 在首次发送失败时向 stderr 报告。
+
+### P1：`DeltaToBestLap` 无法通过 registry/dashboard 路径运行
+
+**修复**：引入 `RealtimeComputeRequest<'a>`（位于 `context.rs`），显式携带所有计算输入。添加 `ComputeRegistry::compute_realtime()` 重载，接受 `(name: &str, request: &RealtimeComputeRequest<'_>) -> ComputeResult<f64>` 以支持按项计算。添加 `resolve_reference_lap()`，在缓存未命中时从 `.acctlm` 文件自动加载（方案 B）。扩展 `DashboardService::subscribe()` 以接受 `Option<ReferenceSource>`。`run()` 现在为每个到期项构建 `RealtimeComputeRequest`，并附带已解析的参考圈。将 `reference_cache` 转换为 `Arc<Vec<TelemetryFrame>>` 以避免借用冲突。
+
+### P2：Dashboard 订阅调度执行所有已注册项
+
+**修复**：`DashboardService::run()` 现在对每个到期项单独调用 `registry.compute_realtime(name, &request)`，而非调用 `registry.compute_realtime(frame)`（后者执行所有项）。仅计算已订阅且到期的项。
+
+### P2：`record --dashboard` 在 120Hz 热路径上克隆 `TelemetryFrame`
+
+**修复**：`TelemetryDistributor::distribute()` 现在接受 `Arc<TelemetryFrame>` 而非 `TelemetryFrame`。`BinaryTelemetryWriter::write_frame()` 现在接受 `&TelemetryFrame`（内部克隆）。`record_command` 将帧包装一次为 `Arc`，在 dashboard 和 writer 之间共享。
+
+### P2：Distributor 丢弃最新帧；文档与行为矛盾
+
+**修复**：将 `TelemetryDistributor::new()` 文档从"旧帧将被丢弃"更新为"满时新帧被丢弃"。将 dashboard 消费者容量从 64 减为 1，以最小化陈旧帧累积。将测试重命名为 `test_overflow_drops_new`。
+
+### P2：Dashboard 线程故障不可观察
+
+**修复**：将 `_dashboard_handle` 提升为 `dashboard_handle`，附带类型注解。添加 `dashboard_dead` 标志。`record_command` 循环现在每次迭代都检查 `handle.is_finished()`；在死亡时禁用 distributor 并打印警告。
+
+### P2：`DeltaToBestLap` 未使用的 `_ref_pos`
+
+**修复**：移除未使用的 `let _ref_pos = ...` 行。添加注释说明位置回退不影响时间差计算。
+
+### P2：`DashboardService` 对失败计算仍推进调度
+
+**修复**：将 `next_schedule` 更新移到 `compute_realtime` 匹配的 `Ok` 分支中。失败项在下一帧重试，无需等待完整间隔。
+
+### P2：`CallbackSink` panic 杀死 dashboard 线程
+
+**修复**：`CallbackSink::send()` 现在用 `std::panic::catch_unwind` 包装回调调用。发生 panic 时记录消息并返回 `Ok(())`，保持 dashboard 线程存活。
+
+### P2：`reference_cache` 没有内存约束
+
+**修复**：添加 `MAX_CACHE_ENTRIES = 4`。`cache_reference_lap()` 和 `resolve_reference_lap()` 在缓存满且键为新时，均会在插入前淘汰一个现有条目。
+
+### P3：`subscribe()` 静默接受未知项名称
+
+**修复**：`DashboardService::subscribe()` 现在返回 `ComputeResult<()>`。在插入之前验证 `self.registry.is_registered(&item_name)`；对未知名称返回 `ComputeError::ItemNotFound`。添加集成测试 `subscribe_unknown_item_returns_error`。
+
+### P3：测试文件是占位符
+
+**修复**：为 `tests/compute_tests.rs` 填充了 3 个集成测试（按项计算、未找到错误、缓存淘汰）。为 `tests/dashboard_tests.rs` 填充了 3 个集成测试（未知订阅错误、成功订阅、端到端数据流）。
+
+### P3：Distributor 文档与行为矛盾
+
+**修复**：见上文 P2 修复（文档更新，容量减为 1）。
+
+### P3：`compute_realtime` 错误仅通过 `eprintln!` 输出
+
+**修复**：部分解决——`DashboardService::run()` 现在使用 `compute_realtime(name, &request)`，返回 `ComputeResult<f64>`，使调用者能够观察到错误。遗留的 `compute_realtime(frame)` 保留 `eprintln!` 以保持向后兼容。
+
+### P3：调度基线使用帧到达时间导致漂移
+
+**修复**：`DashboardService::run()` 现在使用 `prev + interval`（基于上一次调度时间）而非 `now + interval`（基于帧到达时间），防止累积漂移。
+
+### P3：`serve_command` 缺少优雅关闭
+
+**修复**：添加 `ctrlc` 依赖。`serve_command` 注册 Ctrl+C 处理器，设置 `AtomicBool`。主循环从 `loop {` 改为 `while running.load(SeqCst) {`。关闭时，丢弃 distributor（自然断开 dashboard 接收器），join dashboard handle，并干净退出。
+
+### 验证（修复后）
+
+```powershell
+cargo test               # 41 个测试通过 (30 unit + 3 binary_roundtrip + 3 compute_tests + 3 dashboard_tests + 2 binary_roundtrip)
+cargo check --all-targets # 通过
+cargo clippy --all-targets -- -D warnings # 通过
+```
+
+## 复审发现 (2026-06-06)
+
+### R1：`DeltaToBestLap` 回退修复不完整
+
+- 位置：
+  - `src/compute/items.rs:108` 至 `src/compute/items.rs:116`
+- 症状：
+  - 修复日志称已处理 `DeltaToBestLap` 鲁棒性问题。
+  - 代码仅移除了未使用的 `_ref_pos` 绑定并添加了注释。
+  - 即使当前赛车位置相对于之前匹配的参考点已经后移，算法仍从 `self.index` 开始扫描。
+- 具体失败模式：
+  - 参考位置：`0.0 -> 0.5 -> 1.0`。
+  - 第一帧当前位置 `0.8`，设置 `self.index = 1`。
+  - 同一圈中稍后的帧当前位置为 `0.4`，仍从 index `1` 开始扫描。
+  - 返回 `0.5` 处的参考时间，但正确区间在 `0.5` 之前，因此应从 index `0` 重置/搜索。
+- 影响：
+  - 倒车、向后滑动或同一圈内的任何位置回退都可能产生错误的时间差。
+- 需要的修复：
+  - 如果 `current_pos` 小于 `reference[self.index].session.normalized_car_position`，在扫描前将 `self.index` 重置为 `0`。
+  - 添加一个单元测试，先推进 index，然后在同一圈中传入更低的 `normalized_car_position`，验证使用了更早的参考点。
+
+## 复审修复日志 (2026-06-06)
+
+### R1：`DeltaToBestLap` 回退修复完成
+
+**修复**：
+
+- 更新 `DeltaToBestLap::compute()`，使当前归一化位置相对于之前匹配的参考 index 向后移动时，`self.index` 在扫描前重置为 `0`。
+- 防止算法在同一圈中倒车/向后滑动后匹配到较晚的参考区间。
+- 添加单元测试 `test_delta_to_best_lap_resets_index_on_position_backtrack`。
+
+**验证**：
+
+```powershell
+cargo test
+cargo check --all-targets
+cargo clippy --all-targets -- -D warnings
+```
+
+结果：
+
+- `cargo test`：通过
+- `cargo check --all-targets`：通过
+- `cargo clippy --all-targets -- -D warnings`：通过
+
+## 最终完成记录
+
+本计算项审计报告中记录的所有问题的代码修复已在以下提交中完成：
+
+- `b6f8436cebc68d02e188eb01a51ce7e0d4079187` (`fix(dashboard): complete computed items audit fixes`)
+
+其中包括针对 `DeltaToBestLap` 位置回退的最终 R1 复审修正。
