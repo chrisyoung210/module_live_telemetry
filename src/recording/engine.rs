@@ -3,16 +3,16 @@
 //!
 //! Extracted from `src/bin/acc-live-telemetry.rs:record_command()`.
 
-use crate::error::{TelemetryError, TelemetryResult};
+use crate::error::TelemetryResult;
 use crate::recording::source::TelemetrySource;
 use crate::shmem::AccGameStatus;
 use crate::SPageFileStatic;
 use crate::types::RecordingSummary;
-use crate::writer::{BinaryTelemetryWriter, LiveTelemetryConfig};
+use crate::writer::LiveTelemetryConfig;
+use crate::writer_v2::BinaryTelemetryWriterV2;
 use crate::distributor::TelemetryDistributor;
 use crate::writer::TelemetryFrame;
 use crossbeam_channel::Receiver;
-use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -71,6 +71,8 @@ pub struct RecordingLoopResult {
     pub summary: RecordingSummary,
     /// Full path to the output file.
     pub output_path: PathBuf,
+    /// Whether the loop was cancelled before recording started (no writer created).
+    pub cancelled_before_start: bool,
 }
 
 /// Run the recording loop to completion.
@@ -103,11 +105,11 @@ pub fn run_recording_loop(
     config.poll_interval = Duration::from_secs_f64(1.0 / config.poll_hz);
 
     // --- Phase 1: Wait for Live ---
-    let mut writer: Option<BinaryTelemetryWriter<File>> = None;
+    let mut writer: Option<BinaryTelemetryWriterV2> = None;
     let mut sample_tick = 0u64;
     let mut recording_started_at = Instant::now();
-    let mut last_flush = Instant::now();
     let mut last_status: Option<AccGameStatus> = None;
+    let mut last_flush = Instant::now();
 
     // Lap completion detection state
     let mut _prev_norm_pos: Option<f32> = None;
@@ -121,15 +123,24 @@ pub fn run_recording_loop(
         // Check for stop signal
         if stop_rx.try_recv().is_ok() {
             if let Some(w) = writer.take() {
-                let (_, summary) = w.finish()?;
+                let summary = w.finish()?;
                 return Ok(RecordingLoopResult {
                     summary,
                     output_path,
+                    cancelled_before_start: false,
                 });
             }
-            return Err(TelemetryError::InvalidArgument(
-                "stop requested before recording started".to_string(),
-            ));
+            return Ok(RecordingLoopResult {
+                summary: RecordingSummary {
+                    total_samples: 0,
+                    chunk_count: 0,
+                    total_bytes: 0,
+                    footer_offset: 0,
+                    duration: Duration::from_secs(0),
+                },
+                output_path,
+                cancelled_before_start: true,
+            });
         }
 
         // Try to connect / read status
@@ -138,11 +149,12 @@ pub fn run_recording_loop(
             Err(_err) => {
                 // Shared memory error — if already recording, finish and exit
                 if let Some(w) = writer.take() {
-                    let (_, summary) = w.finish()?;
-                    return Ok(RecordingLoopResult {
-                        summary,
-                        output_path,
-                    });
+                    let summary = w.finish()?;
+            return Ok(RecordingLoopResult {
+                summary,
+                output_path,
+                cancelled_before_start: false,
+            });
                 }
                 // Not recording yet — retry after sleep
                 sleep_remaining(tick_start, config.poll_interval);
@@ -184,14 +196,15 @@ pub fn run_recording_loop(
                     poll_hz: config.poll_hz,
                     chunk_rows: config.chunk_rows,
                 };
-                writer = Some(BinaryTelemetryWriter::create_file(
-                    &output_path,
-                    metadata,
-                    w_config,
-                )?);
+                writer = Some(
+                    BinaryTelemetryWriterV2::create_file(
+                        &output_path,
+                        metadata,
+                        w_config,
+                    )?
+                );
                 sample_tick = 0;
                 recording_started_at = Instant::now();
-                last_flush = Instant::now();
             }
 
             let timestamp_ns = recording_started_at
@@ -243,10 +256,11 @@ pub fn run_recording_loop(
             Err(err) => {
                     // Read error — finish and exit
                     if let Some(w) = writer.take() {
-                        let (_, summary) = w.finish()?;
+                        let summary = w.finish()?;
                         return Ok(RecordingLoopResult {
                             summary,
                             output_path,
+                            cancelled_before_start: false,
                         });
                     }
                     // No writer yet — propagate the error
@@ -258,21 +272,22 @@ pub fn run_recording_loop(
         } else {
             // Session ended (Off, Replay, etc.)
             if let Some(w) = writer.take() {
-                let (_, summary) = w.finish()?;
+                let summary = w.finish()?;
                 return Ok(RecordingLoopResult {
                     summary,
                     output_path,
+                    cancelled_before_start: false,
                 });
             }
         }
 
         // Periodic flush
-        if let Some(interval) = config.flush_interval {
-            if let Some(w) = writer.as_mut() {
-                if last_flush.elapsed() >= interval {
-                    w.flush_to_disk()?;
-                    last_flush = Instant::now();
+        if let Some(flush_interval) = config.flush_interval {
+            if last_flush.elapsed() >= flush_interval {
+                if let Some(ref mut w) = writer {
+                    w.flush()?;
                 }
+                last_flush = Instant::now();
             }
         }
 
@@ -332,7 +347,7 @@ mod tests {
 
     #[test]
     fn test_engine_records_fake_source() -> TelemetryResult<()> {
-        let tmp = std::env::temp_dir().join(format!("test_engine_{}.acctlm",
+        let tmp = std::env::temp_dir().join(format!("test_engine_{}.acctlm2",
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
 
         let steps = vec![
@@ -366,8 +381,8 @@ mod tests {
         assert!(result.output_path == tmp);
         assert!(tmp.exists());
 
-        // Verify file is readable via BinaryTelemetryReader
-        let reader = crate::BinaryTelemetryReader::open(&tmp)?;
+        // Verify file is readable via BinaryTelemetryReaderV2
+        let reader = crate::reader_v2::BinaryTelemetryReaderV2::open(&tmp)?;
         assert_eq!(reader.summary().total_samples, 3);
 
         // Cleanup
@@ -377,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_engine_stop_signal() -> TelemetryResult<()> {
-        let tmp = std::env::temp_dir().join(format!("test_engine_stop_{}.acctlm",
+        let tmp = std::env::temp_dir().join(format!("test_engine_stop_{}.acctlm2",
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
 
         // Many Live frames, but we'll send stop signal

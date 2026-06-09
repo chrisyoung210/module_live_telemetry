@@ -17,7 +17,7 @@ pub use request::RecordingRequest;
 pub use status::{
     status_channel, RecordingErrorKind, RecordingStatus, StatusReceiver, StatusSender, StopReason,
 };
-pub use outcome::{aggregate_laps, append_lap_index, extract_lap_telemetry, parse_acctlm_file, session_type_label, AggregatedLap, LapSummary, RecordingOutcome};
+pub use outcome::{aggregate_laps, append_lap_index, extract_lap_telemetry, extract_laps_telemetry, parse_acctlm_file, session_type_label, AggregatedLap, LapSummary, RecordingOutcome};
 pub use dashboard::{DashboardItemInfo, DashboardItemKind, DashboardItemSubscription};
 pub use file_naming::{
     build_output_path, check_no_collision, default_recording_name, ensure_output_dir,

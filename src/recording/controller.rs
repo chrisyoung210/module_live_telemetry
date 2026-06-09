@@ -188,6 +188,13 @@ impl RecordingController {
                         lap_completed,
                     ) {
                         Ok(result) => {
+                            if result.cancelled_before_start {
+                                let _ = status_tx.send(RecordingStatus::Stopping {
+                                    reason: StopReason::Manual,
+                                });
+                                return;
+                            }
+
                             let mut summary = result.summary;
                             summary.duration = recording_start.elapsed();
 

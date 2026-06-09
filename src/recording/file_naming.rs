@@ -37,7 +37,7 @@ fn sanitize_filename_component(s: &str) -> String {
 
 /// Generate a default recording file name.
 ///
-/// Format: `{sanitized_car}_{sanitized_track}_{unix_timestamp_secs}.acctlm`
+/// Format: `{sanitized_car}_{sanitized_track}_{unix_timestamp_secs}.acctlm2`
 pub fn default_recording_name(track_name: &str, car_model: &str) -> PathBuf {
     let car = sanitize_filename_component(car_model);
     let track = sanitize_filename_component(track_name);
@@ -45,7 +45,7 @@ pub fn default_recording_name(track_name: &str, car_model: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    PathBuf::from(format!("{}_{}_{}.acctlm", car, track, ts))
+    PathBuf::from(format!("{}_{}_{}.acctlm2", car, track, ts))
 }
 
 /// Verify that `dir` is an existing directory.
@@ -65,7 +65,7 @@ pub fn ensure_output_dir(dir: &Path) -> TelemetryResult<()> {
 /// Build the output file path for a recording.
 ///
 /// 1. Verifies `output_dir` exists.
-/// 2. Joins the auto-generated name.
+/// 2. Joins the auto-generated name (always .acctlm2 extension).
 pub fn build_output_path(
     output_dir: &Path,
     track_name: &str,
@@ -107,9 +107,18 @@ mod tests {
     fn test_default_recording_name_format() {
         let name = default_recording_name("nurburgring", "BMW M4 GT3");
         let s = name.to_string_lossy().to_string();
-        assert!(s.ends_with(".acctlm"));
+        assert!(s.ends_with(".acctlm2"));
         assert!(s.contains("BMW_M4_GT3"));
         assert!(s.contains("nurburgring"));
+    }
+
+    #[test]
+    fn test_default_recording_name_v2_extension() {
+        let name = default_recording_name("monza", "Ferrari 296 GT3");
+        let s = name.to_string_lossy().to_string();
+        assert!(s.ends_with(".acctlm2"));
+        assert!(s.contains("Ferrari_296_GT3"));
+        assert!(s.contains("monza"));
     }
 
     #[test]
@@ -138,7 +147,7 @@ mod tests {
         let s = path.to_string_lossy();
         assert!(s.contains("Ferrari_296_GT3"));
         assert!(s.contains("monza"));
-        assert!(s.ends_with(".acctlm"));
+        assert!(s.ends_with(".acctlm2"));
     }
 
     #[test]

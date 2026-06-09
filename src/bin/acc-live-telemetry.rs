@@ -1,14 +1,16 @@
 ﻿use module_live_telemetry::{
     parse_raw_frame, shmem::AccGameStatus, shmem::AccSharedMemoryReader,
-    BinaryTelemetryReader, BinaryTelemetryWriter, ControlSample,
-    LiveTelemetryConfig, SessionMetadata, SPageFileStatic,
+    BinaryTelemetryReader, ControlSample,
+    LiveTelemetryConfig, SessionMetadata, SessionSample, SPageFileStatic,
     TelemetryError, TelemetryResult, TimingSample,
     compute::{ComputeRegistry, context::ReferenceSource, items::DeltaTimeToLifeBestLap},
     dashboard::{spawn_dashboard, sink::ChannelSink, service::DashboardService, service::DashboardCommand},
     distributor::TelemetryDistributor,
     item_key::ItemKey,
-    recording::{aggregate_laps, append_lap_index},
+    recording::{append_lap_index, session_type_label},
 };
+use module_live_telemetry::writer::BinaryTelemetryWriter;
+use module_live_telemetry::writer_v2::BinaryTelemetryWriterV2;
 use crossbeam_channel::bounded;
 use std::env;
 use std::fs::File;
@@ -66,7 +68,7 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
     let ref_lap_number = optional_i32(args, "--ref-lap-number", 1)?;
     let poll_interval = Duration::from_secs_f64(1.0 / poll_hz.max(1.0));
     let status_interval = Duration::from_millis(status_interval_ms.max(250));
-    let flush_interval = if flush_interval_ms == 0 {
+    let _flush_interval = if flush_interval_ms == 0 {
         None
     } else {
         Some(Duration::from_millis(flush_interval_ms.max(250)))
@@ -79,12 +81,11 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
 
     println!("waiting for ACC shared memory...");
     let mut reader: Option<AccSharedMemoryReader> = None;
-    let mut writer: Option<BinaryTelemetryWriter<File>> = None;
+    let mut writer: Option<BinaryTelemetryWriterV2> = None;
     let mut output_path: Option<PathBuf> = None;
     let mut sample_tick = 0u64;
     let mut recording_started_at = Instant::now();
     let mut last_status_log = Instant::now() - status_interval;
-    let mut last_flush = Instant::now();
     let mut last_status: Option<AccGameStatus> = None;
 
     // Setup dashboard if requested
@@ -165,7 +166,7 @@ println!("connected to ACC shared memory");
             Ok(status) => status,
             Err(err) => {
                 if let Some(active_writer) = writer.take() {
-                    let (_, summary) = active_writer.finish()?;
+                    let summary = active_writer.finish()?;
                     println!("shared memory disappeared; finished recording {} samples in {} chunks",
                         summary.total_samples, summary.chunk_count);
                     if let Some(ref p) = output_path { append_lap_index_to_file(p); }
@@ -222,11 +223,10 @@ println!("connected to ACC shared memory");
                     poll_hz,
                     chunk_rows,
                 };
-                writer = Some(BinaryTelemetryWriter::create_file(&path, metadata, config)?);
+                writer = Some(BinaryTelemetryWriterV2::create_file(&path, metadata, config)?);
                 output_path = Some(path.clone());
                 sample_tick = 0;
                 recording_started_at = Instant::now();
-                last_flush = Instant::now();
                 println!("recording started: {}", path.display());
             }
 
@@ -254,7 +254,7 @@ println!("connected to ACC shared memory");
                 }
                 Err(err) => {
                     if let Some(active_writer) = writer.take() {
-                        let (_, summary) = active_writer.finish()?;
+                        let summary = active_writer.finish()?;
                         println!(
                             "read failed; finished recording {} samples in {} chunks: {}",
                             summary.total_samples, summary.chunk_count, err
@@ -274,7 +274,7 @@ println!("connected to ACC shared memory");
                 last_status_log = Instant::now();
             }
         } else if let Some(active_writer) = writer.take() {
-            let (_, summary) = active_writer.finish()?;
+            let summary = active_writer.finish()?;
             println!(
                 "session ended; finished recording {} samples in {} chunks",
                 summary.total_samples, summary.chunk_count
@@ -290,13 +290,6 @@ println!("connected to ACC shared memory");
                 status.label()
             );
             last_status_log = Instant::now();
-        }
-
-        if let (Some(interval), Some(active_writer)) = (flush_interval, writer.as_mut()) {
-            if last_flush.elapsed() >= interval {
-                active_writer.flush_to_disk()?;
-                last_flush = Instant::now();
-            }
         }
 
         // Periodically check if dashboard thread has died
@@ -319,30 +312,75 @@ fn inspect_command(args: &[String]) -> TelemetryResult<()> {
     let reader = BinaryTelemetryReader::open(&input)?;
     let metadata = reader.metadata();
     let summary = reader.summary();
+
+    // Session type
+    let session_type_raw = metadata.session_type.unwrap_or(0);
+    let session_label = session_type_label(session_type_raw);
+
+    // Duration
+    let duration = if summary.duration > Duration::ZERO {
+        summary.duration
+    } else {
+        Duration::from_secs_f64(summary.total_samples as f64 / metadata.poll_hz.max(1.0))
+    };
+    let secs = duration.as_secs();
+    let duration_str = format!("{}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60);
+
+    // Recording date/time (UTC+8)
+    let start = std::time::UNIX_EPOCH + Duration::from_nanos(metadata.created_unix_ns);
+    let since_epoch = start.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let total_secs = since_epoch.as_secs().saturating_add(8 * 3600);
+    let days = total_secs / 86400;
+    let time_of_day = total_secs % 86400;
+    // Howard Hinnant civil-date algorithm
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = (z as u64) - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    let hour = (time_of_day / 3600) % 24;
+    let min = (time_of_day / 60) % 60;
+    let sec = time_of_day % 60;
+    let date_str = format!("{}/{:02}/{:02}", y, m, d);
+    let time_str = format!("{:02}:{:02}:{:02}", hour, min, sec);
+
     println!("file: {}", input.display());
-    println!("format: ACTL v{}", reader.header().version);
+    println!("format: ACTL {}", reader.format_label());
     println!("track: {}", metadata.track_name);
     println!("car: {}", metadata.car_model);
+    println!("session: {} ({})", session_label, session_type_raw);
     println!("poll_hz: {:.3}", metadata.poll_hz);
     println!("sm_version: {}", metadata.sm_version);
     println!("ac_version: {}", metadata.ac_version);
-    println!("chunks: {}", summary.chunk_count);
-    println!("samples: {}", summary.total_samples);
-    println!("bytes: {}", summary.total_bytes);
-    println!("footer_offset: {}", summary.footer_offset);
-    for entry in reader.chunk_index() {
-        println!(
-            "chunk #{:04} cluster=0x{:04x} samples={} ticks={}..{} time_ns={}..{} offset={} bytes={}",
-            entry.chunk_seq,
-            entry.cluster_id,
-            entry.end_tick.saturating_sub(entry.start_tick).saturating_add(1),
-            entry.start_tick,
-            entry.end_tick,
-            entry.start_time_ns,
-            entry.end_time_ns,
-            entry.file_offset,
-            entry.byte_len
-        );
+    println!("total_frames: {}", summary.total_samples);
+    println!("duration: {}", duration_str);
+    println!("recorded_at: {} {}", date_str, time_str);
+    println!("file_size: {} bytes", summary.total_bytes);
+
+    // V1 chunk details (v2 returns empty)
+    let chunks = reader.chunk_index_entries();
+    if !chunks.is_empty() {
+        println!("chunks: {}", chunks.len());
+        println!("footer_offset: {}", summary.footer_offset);
+        for entry in &chunks {
+            println!(
+                "chunk #{:04} cluster=0x{:04x} samples={} ticks={}..{} time_ns={}..{} offset={} bytes={}",
+                entry.chunk_seq,
+                entry.cluster_id,
+                entry.end_tick.saturating_sub(entry.start_tick).saturating_add(1),
+                entry.start_tick,
+                entry.end_tick,
+                entry.start_time_ns,
+                entry.end_time_ns,
+                entry.file_offset,
+                entry.byte_len
+            );
+        }
     }
     Ok(())
 }
@@ -357,7 +395,7 @@ fn export_command(args: &[String]) -> TelemetryResult<()> {
         ));
     }
 
-    let reader = BinaryTelemetryReader::open(input)?;
+    let reader = BinaryTelemetryReader::open(&input)?;
     let samples = reader.read_all_controls()?;
     match out {
         Some(path) => {
@@ -390,7 +428,7 @@ fn default_recording_name(_track: &str, car: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    PathBuf::from(format!("live_{}_{}.acctlm", timestamp, car))
+    PathBuf::from(format!("live_{}_{}.acctlm2", timestamp, car))
 }
 
 fn ensure_parent_dir(path: &std::path::Path) -> TelemetryResult<()> {
@@ -485,33 +523,45 @@ fn laps_command(args: &[String]) -> TelemetryResult<()> {
     println!("file: {}", input.display());
     println!("track: {}", metadata.track_name);
     println!("car: {}", metadata.car_model);
+    println!("format: ACTL {}", reader.format_label());
     println!("poll_hz: {:.3}", metadata.poll_hz);
     println!("total_samples: {}", summary.total_samples);
     println!();
 
-    // Use shared aggregation logic (consistent with parse_acctlm_file)
-    let aggregated = aggregate_laps(&reader)?;
-
-    if aggregated.is_empty() {
-        println!("no session or timing data found in this file");
+    let session = reader.read_all_session().unwrap_or_default();
+    if session.is_empty() {
+        println!("no session data found in this file");
         return Ok(());
     }
 
-    // Display
+    let timing = reader.read_all_timing().unwrap_or_default();
+
+    // Build timing lookup by sample_tick
+    let timing_by_tick: std::collections::HashMap<u64, &TimingSample> =
+        timing.iter().map(|t| (t.sample_tick, t)).collect();
+
+    // Detect laps from session data (normalized_car_position crossings)
+    let laps = detect_laps(&session, &timing_by_tick);
+
+    if laps.is_empty() {
+        println!("no laps detected in this file");
+        return Ok(());
+    }
+
     let format_lap_time = |ms: Option<i32>| -> String {
         ms.filter(|&v| v > 0 && v < 2_000_000)
             .map(|v| format!("{}:{:02}.{:03}", v / 60000, (v % 60000) / 1000, v % 1000))
             .unwrap_or_else(|| "-".to_string())
     };
 
-    println!("laps: {} total laps recorded", aggregated.len());
+    println!("laps: {} total laps recorded", laps.len());
     println!();
     println!(
         "{:<5} {:<5} {:<14} {:<14} {:<10} {:<8} {:<12} {:<12}",
         "lap", "out?", "start_tick", "end_tick", "samples", "valid", "time", "best"
     );
 
-    for lap in &aggregated {
+    for lap in &laps {
         println!(
             "{:<5} {:<5} {:<14} {:<14} {:<10} {:<8} {:<12} {:<12}",
             lap.lap_number,
@@ -526,6 +576,115 @@ fn laps_command(args: &[String]) -> TelemetryResult<()> {
     }
 
     Ok(())
+}
+
+/// Simple lap data for display.
+struct LapInfo {
+    lap_number: u32,
+    start_tick: u64,
+    end_tick: u64,
+    sample_count: usize,
+    is_valid: bool,
+    is_out_lap: bool,
+    last_time_ms: Option<i32>,
+    best_time_ms: Option<i32>,
+}
+
+/// Detect laps from session samples using normalized_car_position crossings.
+fn detect_laps(
+    session: &[SessionSample],
+    timing_by_tick: &std::collections::HashMap<u64, &TimingSample>,
+) -> Vec<LapInfo> {
+    // Find S/F line crossings: normalized_car_position drops from >0.8 to <0.2
+    let mut crossings: Vec<usize> = Vec::new();
+    for i in 1..session.len() {
+        let prev = session[i - 1].normalized_car_position;
+        let cur = session[i].normalized_car_position;
+        if prev > 0.8 && cur < 0.2 {
+            crossings.push(i);
+        }
+    }
+
+    let mut laps: Vec<LapInfo> = Vec::new();
+    let mut lap_start: usize = 0;
+    let mut lap_num: u32 = 0;
+
+    for &cross_idx in &crossings {
+        let start_tick = session[lap_start].sample_tick;
+        let end_tick = session[cross_idx.saturating_sub(1)].sample_tick;
+        let sample_count = cross_idx - lap_start;
+        let is_out_lap = lap_num == 0;
+
+        // Check last 3 samples for validity
+        let end = cross_idx.saturating_sub(1);
+        let start = end.saturating_sub(2).max(lap_start);
+        let is_valid = !is_out_lap
+            && !session[start..=end].iter().any(|s| s.is_valid_lap == 0);
+
+        // Find timing data near the crossing
+        let (last_time_ms, best_time_ms) = timing_at_tick(timing_by_tick, session[cross_idx].sample_tick);
+
+        laps.push(LapInfo {
+            lap_number: lap_num,
+            start_tick,
+            end_tick,
+            sample_count,
+            is_valid,
+            is_out_lap,
+            last_time_ms,
+            best_time_ms,
+        });
+
+        lap_start = cross_idx;
+        lap_num += 1;
+    }
+
+    // Last (possibly incomplete) lap
+    if lap_start < session.len() {
+        let last_idx = session.len() - 1;
+        let start_tick = session[lap_start].sample_tick;
+        let end_tick = session[last_idx].sample_tick;
+        let sample_count = last_idx - lap_start + 1;
+        let is_out_lap = lap_num == 0;
+        let end_3 = last_idx.saturating_sub(2).max(lap_start);
+        let is_valid = !is_out_lap
+            && !session[end_3..=last_idx].iter().any(|s| s.is_valid_lap == 0);
+
+        laps.push(LapInfo {
+            lap_number: lap_num,
+            start_tick,
+            end_tick,
+            sample_count,
+            is_valid,
+            is_out_lap,
+            last_time_ms: None,
+            best_time_ms: None,
+        });
+    }
+
+    laps
+}
+
+/// Get timing info (last_time, best_time) for a given tick.
+fn timing_at_tick(
+    timing_by_tick: &std::collections::HashMap<u64, &TimingSample>,
+    tick: u64,
+) -> (Option<i32>, Option<i32>) {
+    if let Some(&t) = timing_by_tick.get(&tick) {
+        let last = if t.i_last_time > 0 && t.i_last_time < 2_000_000 {
+            Some(t.i_last_time)
+        } else {
+            None
+        };
+        let best = if t.i_best_time > 0 && t.i_best_time < 2_000_000 {
+            Some(t.i_best_time)
+        } else {
+            None
+        };
+        (last, best)
+    } else {
+        (None, None)
+    }
 }
 
 fn record_raw_command(args: &[String]) -> TelemetryResult<()> {
@@ -643,7 +802,7 @@ fn record_all_command(args: &[String]) -> TelemetryResult<()> {
     let flush_interval_ms = optional_u64(args, "--flush-interval-ms", 2000)?;
     let poll_interval = Duration::from_secs_f64(1.0 / poll_hz.max(1.0));
     let status_interval = Duration::from_millis(status_interval_ms.max(250));
-    let flush_interval = if flush_interval_ms == 0 {
+    let _flush_interval = if flush_interval_ms == 0 {
         None
     } else {
         Some(Duration::from_millis(flush_interval_ms.max(250)))
@@ -657,13 +816,12 @@ fn record_all_command(args: &[String]) -> TelemetryResult<()> {
 
     println!("waiting for ACC shared memory...");
     let mut reader: Option<AccSharedMemoryReader> = None;
-    let mut writer: Option<BinaryTelemetryWriter<File>> = None;
+    let mut writer: Option<BinaryTelemetryWriterV2> = None;
     let mut raw_file: Option<std::fs::File> = None;
     let mut output_path: Option<PathBuf> = None;
     let mut sample_tick = 0u64;
     let mut recording_started_at = Instant::now();
     let mut last_status_log = Instant::now() - status_interval;
-    let mut last_flush = Instant::now();
     let mut last_status: Option<AccGameStatus> = None;
 
     loop {
@@ -692,7 +850,7 @@ fn record_all_command(args: &[String]) -> TelemetryResult<()> {
             Ok(status) => status,
             Err(err) => {
                 if let Some(active_writer) = writer.take() {
-                    let (_, summary) = active_writer.finish()?;
+                    let summary = active_writer.finish()?;
                     println!(
                         "shared memory disappeared; finished acctlm recording {} samples in {} chunks",
                         summary.total_samples, summary.chunk_count
@@ -754,7 +912,7 @@ fn record_all_command(args: &[String]) -> TelemetryResult<()> {
                     poll_hz,
                     chunk_rows,
                 };
-                writer = Some(BinaryTelemetryWriter::create_file(
+                writer = Some(BinaryTelemetryWriterV2::create_file(
                     &path, metadata, config,
                 )?);
                 output_path = Some(path.clone());
@@ -773,7 +931,6 @@ fn record_all_command(args: &[String]) -> TelemetryResult<()> {
 
                 sample_tick = 0;
                 recording_started_at = Instant::now();
-                last_flush = Instant::now();
                 println!(
                     "recording started: {} (acctlm) and {} (accraw)",
                     output_path.as_ref().unwrap().display(),
@@ -809,9 +966,9 @@ fn record_all_command(args: &[String]) -> TelemetryResult<()> {
                 last_status_log = Instant::now();
             }
         } else if let Some(active_writer) = writer.take() {
-            let (_, summary) = active_writer.finish()?;
+            let summary = active_writer.finish()?;
             println!(
-                "session ended; finished acctlm recording {} samples in {} chunks",
+                "session ended; finished recording {} samples in {} chunks",
                 summary.total_samples, summary.chunk_count
             );
             if let Some(ref p) = output_path {
@@ -829,13 +986,6 @@ fn record_all_command(args: &[String]) -> TelemetryResult<()> {
                 status.label()
             );
             last_status_log = Instant::now();
-        }
-
-        if let (Some(interval), Some(active_writer)) = (flush_interval, writer.as_mut()) {
-            if last_flush.elapsed() >= interval {
-                active_writer.flush_to_disk()?;
-                last_flush = Instant::now();
-            }
         }
 
         sleep_remaining(tick_start, poll_interval);
@@ -1001,7 +1151,7 @@ fn export_lap_field_command(args: &[String]) -> TelemetryResult<()> {
 
     // Find lap boundaries
     let lap_entries = reader.lap_index();
-    let (start_tick, end_tick) = if !lap_entries.is_empty() && (lap_num as usize) < lap_entries.len() {
+    let (start_tick, end_tick) = if !lap_entries.is_empty() && lap_num < lap_entries.len() {
         (lap_entries[lap_num].start_tick, lap_entries[lap_num].end_tick)
     } else {
         // Fallback: scan session data
@@ -1112,26 +1262,32 @@ fn session_info_command(args: &[String]) -> TelemetryResult<()> {
     let meta = reader.metadata();
     let summary = reader.summary();
 
-    // Parse static page if available
-    let stat = if !meta.raw_static_bytes.is_empty() {
-        Some(SPageFileStatic::from_raw(&meta.raw_static_bytes))
+    // Parse static page if available (v1 only; v2 metadata may not have raw_static_bytes)
+    let raw_static = reader.raw_static_bytes();
+    let stat = if !raw_static.is_empty() {
+        Some(SPageFileStatic::from_raw(raw_static))
     } else {
         None
     };
 
     println!("=== File ===");
     println!("file: {}", input.display());
-    println!("format: ACTL v{}", reader.header().version);
+    println!("format: ACTL {}", reader.format_label());
     println!("track: {}", meta.track_name);
     println!("car: {}", meta.car_model);
     println!("poll_hz: {:.3}", meta.poll_hz);
-    println!("chunks: {}", summary.chunk_count);
-    println!("samples: {}", summary.total_samples);
 
-    // Game version
-    if let Some(ref s) = stat {
-        println!("sm_version: {}", s.sm_version_str());
-        println!("ac_version: {}", s.ac_version_str());
+    // Session type from metadata
+    let session_type_raw = meta.session_type.unwrap_or(0);
+    println!("session_type: {} ({})", session_type_label(session_type_raw), session_type_raw);
+
+    println!("total_frames: {}", summary.total_samples);
+    println!("file_size: {} bytes", summary.total_bytes);
+
+    // Game version (may be empty for v2)
+    if !meta.sm_version.is_empty() && !meta.ac_version.is_empty() {
+        println!("sm_version: {}", meta.sm_version);
+        println!("ac_version: {}", meta.ac_version);
     }
 
     // Vehicle info from static page
@@ -1189,18 +1345,7 @@ fn session_info_command(args: &[String]) -> TelemetryResult<()> {
     // First session sample for runtime info
     let session_samples = reader.read_all_session().unwrap_or_default();
     if let Some(first) = session_samples.first() {
-        let session_label = match first.session {
-            0 => "PRACTICE",
-            1 => "QUALIFY",
-            2 => "RACE",
-            3 => "HOTLAP",
-            4 => "TIME_ATTACK",
-            5 => "DRIFT",
-            6 => "DRAG",
-            7 => "HOTSTINT",
-            8 => "HOTLAP_SUPERPOLE",
-            _ => "UNKNOWN",
-        };
+        let session_label = session_type_label(first.session);
         let status_label = match first.status {
             0 => "OFF",
             1 => "REPLAY",

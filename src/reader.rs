@@ -58,28 +58,77 @@ use crate::types::{
     PowertrainSample, RecordingSummary, SessionMetadata, SessionSample,
     TimingSample, TyreSample, LapIndexEntry, CLUSTER_CONTROLS,
 };
+use crate::reader_v2::BinaryTelemetryReaderV2;
+use crate::item_key::ItemKey;
+use crate::writer::TelemetryFrame;
 use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
-pub struct BinaryTelemetryReader {
-    bytes: Vec<u8>,
-    header: FileHeader,
-    metadata: SessionMetadata,
-    index_entries: Vec<IndexEntry>,
-    lap_entries: Vec<LapIndexEntry>,
-    summary: RecordingSummary,
+// ---------------------------------------------------------------------------
+// Format auto-detection
+// ---------------------------------------------------------------------------
+
+/// V2 file magic: "ACT2"
+const MAGIC_V2: [u8; 4] = *b"ACT2";
+
+/// Internal enum that dispatches to either v1 or v2 reader logic.
+enum InnerReader {
+    V1 {
+        bytes: Vec<u8>,
+        header: FileHeader,
+        metadata: SessionMetadata,
+        index_entries: Vec<IndexEntry>,
+        lap_entries: Vec<LapIndexEntry>,
+        summary: RecordingSummary,
+    },
+    V2(BinaryTelemetryReaderV2),
 }
 
+/// Unified telemetry reader — auto-detects acctlm (v1) vs. acctlm2 (v2) format.
+///
+/// Callers only use `BinaryTelemetryReader::open(path)`; the internal format
+/// is detected from the file's first 4 bytes (`b"ACT2"` = v2, else v1).
+pub struct BinaryTelemetryReader {
+    inner: InnerReader,
+}
 impl BinaryTelemetryReader {
+    // -----------------------------------------------------------------------
+    // Constructors — auto-detect format
+    // -----------------------------------------------------------------------
+
+    /// Open a telemetry file and auto-detect V1/V2 format.
     pub fn open(path: impl AsRef<Path>) -> TelemetryResult<Self> {
-        let mut file = File::open(path)?;
+        let mut file = File::open(path.as_ref())?;
+        let mut magic = [0u8; 4];
+        let is_v2 = file.read_exact(&mut magic).is_ok() && magic == MAGIC_V2;
+        drop(file);
+
+        if is_v2 {
+            return Ok(Self {
+                inner: InnerReader::V2(BinaryTelemetryReaderV2::open(path)?),
+            });
+        }
+
+        // V1: read entire file into memory
+        let mut file = File::open(path.as_ref())?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
-        Self::from_bytes(bytes)
+        Self::from_v1_bytes(bytes)
     }
 
+    /// Parse telemetry from an in-memory buffer, auto-detecting V1/V2 format.
     pub fn from_bytes(bytes: Vec<u8>) -> TelemetryResult<Self> {
+        if bytes.len() >= 4 && bytes[0..4] == MAGIC_V2 {
+            return Ok(Self {
+                inner: InnerReader::V2(BinaryTelemetryReaderV2::from_bytes(bytes)?),
+            });
+        }
+        Self::from_v1_bytes(bytes)
+    }
+
+    /// Private: parse V1 bytes into the reader (original logic).
+    fn from_v1_bytes(bytes: Vec<u8>) -> TelemetryResult<Self> {
         let mut cursor = Cursor::new(bytes.as_slice());
         let header = FileHeader::read_from(&mut cursor)?;
 
@@ -118,7 +167,6 @@ impl BinaryTelemetryReader {
             duration: std::time::Duration::ZERO,
         };
 
-        // Try to read lap index after footer (only when footer exists)
         let lap_entries = if footer_offset > 0 {
             let lap_offset = footer_offset + 12 + (index_entries.len() as u64) * IndexEntry::BYTE_LEN as u64 + 28;
             read_lap_index_if_present(&bytes, lap_offset)
@@ -127,209 +175,565 @@ impl BinaryTelemetryReader {
         };
 
         Ok(Self {
-            bytes, header, metadata,
-            index_entries, lap_entries, summary,
+            inner: InnerReader::V1 {
+                bytes, header, metadata,
+                index_entries, lap_entries, summary,
+            },
         })
     }
 
+    // -----------------------------------------------------------------------
+    // Accessors — dispatch on inner format
+    // -----------------------------------------------------------------------
+
     pub fn metadata(&self) -> &SessionMetadata {
-        &self.metadata
+        match &self.inner {
+            InnerReader::V1 { metadata, .. } => metadata,
+            InnerReader::V2(r) => r.metadata(),
+        }
     }
 
-    pub fn summary(&self) -> &RecordingSummary {
-        &self.summary
+    pub fn summary(&self) -> RecordingSummary {
+        match &self.inner {
+            InnerReader::V1 { summary, .. } => summary.clone(),
+            InnerReader::V2(r) => r.summary(),
+        }
     }
 
-    pub fn header(&self) -> FileHeader {
-        self.header
+    /// Format label: `"v1"` or `"v2"`.
+    pub fn format_label(&self) -> &'static str {
+        match &self.inner {
+            InnerReader::V1 { .. } => "v1",
+            InnerReader::V2(_) => "v2",
+        }
     }
 
-    pub fn chunk_index(&self) -> &[IndexEntry] {
-        &self.index_entries
+    pub fn header(&self) -> Option<FileHeader> {
+        match &self.inner {
+            InnerReader::V1 { header, .. } => Some(*header),
+            InnerReader::V2(_) => None,
+        }
     }
 
-    pub fn lap_index(&self) -> &[LapIndexEntry] {
-        &self.lap_entries
+    /// Chunk index entries (V1 only; empty for V2).
+    pub fn chunk_index_entries(&self) -> Vec<IndexEntry> {
+        match &self.inner {
+            InnerReader::V1 { index_entries, .. } => index_entries.clone(),
+            InnerReader::V2(_) => Vec::new(),
+        }
     }
+
+    /// Unified lap index (converts V2 format to V1-compatible `LapIndexEntry`).
+    pub fn lap_index(&self) -> Vec<LapIndexEntry> {
+        match &self.inner {
+            InnerReader::V1 { lap_entries, .. } => lap_entries.clone(),
+            InnerReader::V2(r) => r.lap_index().iter().map(|e| LapIndexEntry {
+                lap_number: e.lap_number,
+                start_tick: e.start_tick,
+                end_tick: e.end_tick,
+                sample_count: e.sample_count,
+                is_valid: e.is_valid,
+                is_out_lap: e.is_out_lap,
+            }).collect(),
+        }
+    }
+
+    /// Raw static bytes from metadata (V1 only; empty for V2).
+    pub fn raw_static_bytes(&self) -> &[u8] {
+        match &self.inner {
+            InnerReader::V1 { metadata, .. } => &metadata.raw_static_bytes,
+            InnerReader::V2(_) => &[],
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // read_all_* — per-substructure reads
+    // -----------------------------------------------------------------------
 
     pub fn read_all_controls(&self) -> TelemetryResult<Vec<ControlSample>> {
-        let mut out = Vec::new();
-        for entry in self
-            .index_entries
-            .iter()
-            .filter(|entry| entry.cluster_id == CLUSTER_CONTROLS)
-        {
-            out.extend(self.read_controls_chunk(entry)?);
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_all_controls_v1(),
+            InnerReader::V2(r) => r.read_all_controls_v2(),
         }
-        Ok(out)
     }
 
     pub fn read_all_session(&self) -> TelemetryResult<Vec<SessionSample>> {
-        let mut out = Vec::new();
-        for entry in self
-            .index_entries
-            .iter()
-            .filter(|entry| entry.cluster_id == CLUSTER_SESSION)
-        {
-            out.extend(self.read_session_chunk(entry)?);
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_all_session_v1(),
+            InnerReader::V2(r) => r.read_all_session_v2(),
         }
-        Ok(out)
     }
 
     pub fn read_all_timing(&self) -> TelemetryResult<Vec<TimingSample>> {
-        let mut out = Vec::new();
-        for entry in self
-            .index_entries
-            .iter()
-            .filter(|entry| entry.cluster_id == CLUSTER_TIMING)
-        {
-            out.extend(self.read_timing_chunk(entry)?);
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_all_timing_v1(),
+            InnerReader::V2(r) => r.read_all_timing_v2(),
         }
-        Ok(out)
     }
 
     pub fn read_all_environment(&self) -> TelemetryResult<Vec<EnvironmentSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_all_environment_v1(),
+            InnerReader::V2(r) => r.read_all_environment_v2(),
+        }
+    }
+
+    pub fn read_all_motion(&self) -> TelemetryResult<Vec<MotionSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_all_motion_v1(),
+            InnerReader::V2(r) => r.read_all_motion_v2(),
+        }
+    }
+
+    pub fn read_all_tyres(&self) -> TelemetryResult<Vec<TyreSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_all_tyres_v1(),
+            InnerReader::V2(r) => r.read_all_tyres_v2(),
+        }
+    }
+
+    pub fn read_all_powertrain(&self) -> TelemetryResult<Vec<PowertrainSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_all_powertrain_v1(),
+            InnerReader::V2(r) => r.read_all_powertrain_v2(),
+        }
+    }
+
+    pub fn read_all_car_state(&self) -> TelemetryResult<Vec<CarStateSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_all_car_state_v1(),
+            InnerReader::V2(r) => r.read_all_car_state_v2(),
+        }
+    }
+
+    pub fn read_all_other_cars(&self) -> TelemetryResult<Vec<OtherCarsSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_all_other_cars_v1(),
+            InnerReader::V2(r) => r.read_all_other_cars_v2(),
+        }
+    }
+
+    /// Read only the fields needed for lap boundary detection:
+    /// `(sample_tick, normalized_car_position, is_valid_lap)`.
+    ///
+    /// This avoids allocating full `SessionSample` structs and is
+    /// significantly more memory-efficient for large files.
+    pub fn read_lap_boundary_data(&self) -> TelemetryResult<Vec<(u64, f32, i32)>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_lap_boundary_data_v1(),
+            InnerReader::V2(r) => r.read_lap_boundary_data_v2(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // read_*_range — tick-range reads (v2 uses skip index; v1 reads all + filters)
+    // -----------------------------------------------------------------------
+
+    pub fn read_controls_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<ControlSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => {
+                Ok(self.read_all_controls()?.into_iter()
+                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                    .collect())
+            }
+            InnerReader::V2(r) => r.read_controls_range_v2(start_tick, end_tick),
+        }
+    }
+
+    pub fn read_motion_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<MotionSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => {
+                Ok(self.read_all_motion()?.into_iter()
+                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                    .collect())
+            }
+            InnerReader::V2(r) => r.read_motion_range_v2(start_tick, end_tick),
+        }
+    }
+
+    pub fn read_tyres_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<TyreSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => {
+                Ok(self.read_all_tyres()?.into_iter()
+                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                    .collect())
+            }
+            InnerReader::V2(r) => r.read_tyres_range_v2(start_tick, end_tick),
+        }
+    }
+
+    pub fn read_powertrain_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<PowertrainSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => {
+                Ok(self.read_all_powertrain()?.into_iter()
+                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                    .collect())
+            }
+            InnerReader::V2(r) => r.read_powertrain_range_v2(start_tick, end_tick),
+        }
+    }
+
+    pub fn read_session_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<SessionSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => {
+                Ok(self.read_all_session()?.into_iter()
+                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                    .collect())
+            }
+            InnerReader::V2(r) => r.read_session_range_v2(start_tick, end_tick),
+        }
+    }
+
+    pub fn read_timing_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<TimingSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => {
+                Ok(self.read_all_timing()?.into_iter()
+                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                    .collect())
+            }
+            InnerReader::V2(r) => r.read_timing_range_v2(start_tick, end_tick),
+        }
+    }
+
+    pub fn read_car_state_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<CarStateSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => {
+                Ok(self.read_all_car_state()?.into_iter()
+                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                    .collect())
+            }
+            InnerReader::V2(r) => r.read_car_state_range_v2(start_tick, end_tick),
+        }
+    }
+
+    pub fn read_environment_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<EnvironmentSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => {
+                Ok(self.read_all_environment()?.into_iter()
+                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                    .collect())
+            }
+            InnerReader::V2(r) => r.read_environment_range_v2(start_tick, end_tick),
+        }
+    }
+
+    pub fn read_other_cars_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<OtherCarsSample>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => {
+                Ok(self.read_all_other_cars()?.into_iter()
+                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                    .collect())
+            }
+            InnerReader::V2(r) => r.read_other_cars_range_v2(start_tick, end_tick),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Unified frame-level reads
+    // -----------------------------------------------------------------------
+
+    /// Read all frames as unified `TelemetryFrame` structs.
+    pub fn read_all_frames(&self) -> TelemetryResult<Vec<TelemetryFrame>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_all_frames_v1(),
+            InnerReader::V2(r) => r.read_all_frames(),
+        }
+    }
+
+    /// Read frames belonging to a specific lap (1-based).
+    pub fn read_lap_frames(&self, lap_number: i32) -> TelemetryResult<Vec<TelemetryFrame>> {
+        match &self.inner {
+            InnerReader::V1 { lap_entries, .. } => {
+                let entry = lap_entries.iter().find(|e| e.lap_number == lap_number)
+                    .ok_or_else(|| TelemetryError::InvalidArgument(format!(
+                        "lap {lap_number} not found in lap index"
+                    )))?;
+                let all = self.read_all_frames_v1()?;
+                Ok(all.into_iter()
+                    .filter(|f| f.sample_tick >= entry.start_tick && f.sample_tick <= entry.end_tick)
+                    .collect())
+            }
+            InnerReader::V2(r) => r.read_lap_frames(lap_number),
+        }
+    }
+
+    /// Read values for a single raw column identified by `ItemKey`.
+    pub fn read_item_frames(
+        &self,
+        key: &ItemKey,
+        start_frame: u64,
+        end_frame: u64,
+    ) -> TelemetryResult<Vec<f64>> {
+        match &self.inner {
+            InnerReader::V1 { .. } => self.read_item_frames_v1(key, start_frame, end_frame),
+            InnerReader::V2(r) => r.read_item_frames(key, start_frame, end_frame),
+        }
+    }
+
+    // =======================================================================
+    // Private V1-only implementation helpers
+    // =======================================================================
+
+    fn read_all_frames_v1(&self) -> TelemetryResult<Vec<TelemetryFrame>> {
+        let controls = self.read_all_controls_v1()?;
+        let n = controls.len();
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let session = self.read_all_session_v1().unwrap_or_default();
+        let timing = self.read_all_timing_v1().unwrap_or_default();
+        let motion = self.read_all_motion_v1().unwrap_or_default();
+        let tyres = self.read_all_tyres_v1().unwrap_or_default();
+        let powertrain = self.read_all_powertrain_v1().unwrap_or_default();
+        let car_state = self.read_all_car_state_v1().unwrap_or_default();
+        let environment = self.read_all_environment_v1().unwrap_or_default();
+        let other_cars = self.read_all_other_cars_v1().unwrap_or_default();
+
+        let mut frames = Vec::with_capacity(n);
+        for (i, control) in controls.iter().enumerate().take(n) {
+            frames.push(TelemetryFrame {
+                sample_tick: control.sample_tick,
+                timestamp_ns: control.timestamp_ns,
+                controls: *control,
+                session: session.get(i).cloned().unwrap_or_default(),
+                timing: timing.get(i).cloned().unwrap_or_default(),
+                motion: motion.get(i).cloned().unwrap_or_default(),
+                tyres: tyres.get(i).cloned().unwrap_or_default(),
+                powertrain: powertrain.get(i).cloned().unwrap_or_default(),
+                car_state: car_state.get(i).cloned().unwrap_or_default(),
+                environment: environment.get(i).cloned().unwrap_or_default(),
+                other_cars: other_cars.get(i).cloned().unwrap_or_default(),
+            });
+        }
+        Ok(frames)
+    }
+
+    fn read_item_frames_v1(
+        &self,
+        key: &ItemKey,
+        start_frame: u64,
+        end_frame: u64,
+    ) -> TelemetryResult<Vec<f64>> {
+        use crate::item_key::ItemType;
+        match key.item_type {
+            ItemType::Raw => {
+                let frames = self.read_all_frames_v1()?;
+                Ok(frames
+                    .into_iter()
+                    .filter(|f| f.sample_tick >= start_frame && f.sample_tick <= end_frame)
+                    .filter_map(|f| f.raw_field_value(&key.name))
+                    .collect())
+            }
+            _ => Err(TelemetryError::InvalidArgument(format!(
+                "only raw items supported for v1 read_item_frames; got {}:{}",
+                key.item_type.as_str(),
+                key.name
+            ))),
+        }
+    }
+
+    // =======================================================================
+    // V1 private chunk-based reads
+    // =======================================================================
+
+    fn read_all_controls_v1(&self) -> TelemetryResult<Vec<ControlSample>> {
+        let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in self
-            .index_entries
-            .iter()
-            .filter(|entry| entry.cluster_id == CLUSTER_ENVIRONMENT)
-        {
-            out.extend(self.read_environment_chunk(entry)?);
+        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_CONTROLS) {
+            out.extend(self.read_controls_chunk(entry, bytes)?);
         }
         Ok(out)
     }
 
-    fn read_controls_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<ControlSample>> {
-        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_CONTROLS)?;
+    fn read_all_session_v1(&self) -> TelemetryResult<Vec<SessionSample>> {
+        let (index_entries, bytes) = self.v1_data()?;
+        let mut out = Vec::new();
+        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_SESSION) {
+            out.extend(self.read_session_chunk(entry, bytes)?);
+        }
+        Ok(out)
+    }
+
+    fn read_all_timing_v1(&self) -> TelemetryResult<Vec<TimingSample>> {
+        let (index_entries, bytes) = self.v1_data()?;
+        let mut out = Vec::new();
+        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_TIMING) {
+            out.extend(self.read_timing_chunk(entry, bytes)?);
+        }
+        Ok(out)
+    }
+
+    fn read_all_environment_v1(&self) -> TelemetryResult<Vec<EnvironmentSample>> {
+        let (index_entries, bytes) = self.v1_data()?;
+        let mut out = Vec::new();
+        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_ENVIRONMENT) {
+            out.extend(self.read_environment_chunk(entry, bytes)?);
+        }
+        Ok(out)
+    }
+
+    fn read_all_motion_v1(&self) -> TelemetryResult<Vec<MotionSample>> {
+        let (index_entries, bytes) = self.v1_data()?;
+        let mut out = Vec::new();
+        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_MOTION) {
+            out.extend(self.read_motion_chunk(entry, bytes)?);
+        }
+        Ok(out)
+    }
+
+    fn read_all_tyres_v1(&self) -> TelemetryResult<Vec<TyreSample>> {
+        let (index_entries, bytes) = self.v1_data()?;
+        let mut out = Vec::new();
+        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_TYRES) {
+            out.extend(self.read_tyres_chunk(entry, bytes)?);
+        }
+        Ok(out)
+    }
+
+    fn read_all_powertrain_v1(&self) -> TelemetryResult<Vec<PowertrainSample>> {
+        let (index_entries, bytes) = self.v1_data()?;
+        let mut out = Vec::new();
+        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_POWERTRAIN) {
+            out.extend(self.read_powertrain_chunk(entry, bytes)?);
+        }
+        Ok(out)
+    }
+
+    fn read_all_car_state_v1(&self) -> TelemetryResult<Vec<CarStateSample>> {
+        let (index_entries, bytes) = self.v1_data()?;
+        let mut out = Vec::new();
+        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_CAR_STATE) {
+            out.extend(self.read_car_state_chunk(entry, bytes)?);
+        }
+        Ok(out)
+    }
+
+    fn read_all_other_cars_v1(&self) -> TelemetryResult<Vec<OtherCarsSample>> {
+        let (index_entries, bytes) = self.v1_data()?;
+        let mut out = Vec::new();
+        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_OTHER_CARS) {
+            out.extend(self.read_other_cars_chunk(entry, bytes)?);
+        }
+        Ok(out)
+    }
+
+    /// Helper: extract V1 data references (panics if called on V2).
+    fn v1_data(&self) -> TelemetryResult<(&[IndexEntry], &[u8])> {
+        match &self.inner {
+            InnerReader::V1 { index_entries, bytes, .. } => Ok((index_entries, bytes)),
+            InnerReader::V2(_) => Err(TelemetryError::InvalidFormat(
+                "v1-only operation called on v2 reader".to_string(),
+            )),
+        }
+    }
+
+    fn read_controls_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<ControlSample>> {
+        let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_CONTROLS)?;
         decode_controls_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_session_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<SessionSample>> {
-        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_SESSION)?;
+    fn read_session_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<SessionSample>> {
+        let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_SESSION)?;
         decode_session_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_timing_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<TimingSample>> {
-        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_TIMING)?;
+    fn read_timing_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<TimingSample>> {
+        let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_TIMING)?;
         decode_timing_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_environment_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<EnvironmentSample>> {
-        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_ENVIRONMENT)?;
+    fn read_environment_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<EnvironmentSample>> {
+        let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_ENVIRONMENT)?;
         decode_environment_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_chunk_raw(
-        &self,
-        entry: &IndexEntry,
-        expected_cluster: u16,
-    ) -> TelemetryResult<(ChunkHeader, Vec<ColumnEntry>, &[u8])> {
-        let start = entry.file_offset as usize;
-        let end = start.saturating_add(entry.byte_len as usize);
-        if end > self.bytes.len() {
-            return Err(TelemetryError::InvalidFormat(format!(
-                "chunk {} points past eof",
-                entry.chunk_seq
-            )));
-        }
-
-        let mut cursor = Cursor::new(&self.bytes[start..end]);
-        let header = ChunkHeader::read_from(&mut cursor)?;
-        if header.cluster_id != expected_cluster {
-            return Err(TelemetryError::InvalidFormat(format!(
-                "attempted to decode chunk with cluster 0x{:04x} as 0x{:04x}",
-                header.cluster_id, expected_cluster
-            )));
-        }
-
-        let mut columns = Vec::with_capacity(header.column_count as usize);
-        for _ in 0..header.column_count {
-            columns.push(ColumnEntry::read_from(&mut cursor)?);
-        }
-
-        let payload_start = start + ChunkHeader::byte_len(columns.len());
-        let payload_end = payload_start + header.payload_len as usize;
-        if payload_end > end {
-            return Err(TelemetryError::InvalidFormat(
-                "payload points past chunk".to_string(),
-            ));
-        }
-        let payload = &self.bytes[payload_start..payload_end];
-        if crc32(payload) != header.payload_crc32 {
-            return Err(TelemetryError::InvalidFormat(format!(
-                "payload crc mismatch in chunk {}",
-                header.chunk_seq
-            )));
-        }
-
-        Ok((header, columns, payload))
-    }
-
-    // ---- Motion ----
-    pub fn read_all_motion(&self) -> TelemetryResult<Vec<MotionSample>> {
-        let mut out = Vec::new();
-        for entry in self.index_entries.iter().filter(|e| e.cluster_id == CLUSTER_MOTION) {
-            out.extend(self.read_motion_chunk(entry)?);
-        }
-        Ok(out)
-    }
-    fn read_motion_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<MotionSample>> {
-        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_MOTION)?;
+    fn read_motion_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<MotionSample>> {
+        let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_MOTION)?;
         decode_motion_payload(payload, &columns, header.sample_count as usize)
     }
 
-    // ---- Tyres ----
-    pub fn read_all_tyres(&self) -> TelemetryResult<Vec<TyreSample>> {
-        let mut out = Vec::new();
-        for entry in self.index_entries.iter().filter(|e| e.cluster_id == CLUSTER_TYRES) {
-            out.extend(self.read_tyres_chunk(entry)?);
-        }
-        Ok(out)
-    }
-    fn read_tyres_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<TyreSample>> {
-        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_TYRES)?;
+    fn read_tyres_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<TyreSample>> {
+        let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_TYRES)?;
         decode_tyres_payload(payload, &columns, header.sample_count as usize)
     }
 
-    // ---- Powertrain ----
-    pub fn read_all_powertrain(&self) -> TelemetryResult<Vec<PowertrainSample>> {
-        let mut out = Vec::new();
-        for entry in self.index_entries.iter().filter(|e| e.cluster_id == CLUSTER_POWERTRAIN) {
-            out.extend(self.read_powertrain_chunk(entry)?);
-        }
-        Ok(out)
-    }
-    fn read_powertrain_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<PowertrainSample>> {
-        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_POWERTRAIN)?;
+    fn read_powertrain_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<PowertrainSample>> {
+        let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_POWERTRAIN)?;
         decode_powertrain_payload(payload, &columns, header.sample_count as usize)
     }
 
-    // ---- CarState ----
-    pub fn read_all_car_state(&self) -> TelemetryResult<Vec<CarStateSample>> {
-        let mut out = Vec::new();
-        for entry in self.index_entries.iter().filter(|e| e.cluster_id == CLUSTER_CAR_STATE) {
-            out.extend(self.read_car_state_chunk(entry)?);
-        }
-        Ok(out)
-    }
-    fn read_car_state_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<CarStateSample>> {
-        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_CAR_STATE)?;
+    fn read_car_state_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<CarStateSample>> {
+        let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_CAR_STATE)?;
         decode_car_state_payload(payload, &columns, header.sample_count as usize)
     }
 
-    // ---- OtherCars ----
-    pub fn read_all_other_cars(&self) -> TelemetryResult<Vec<OtherCarsSample>> {
+    fn read_other_cars_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<OtherCarsSample>> {
+        let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_OTHER_CARS)?;
+        decode_other_cars_payload(payload, &columns, header.sample_count as usize)
+    }
+
+    /// Lightweight V1 lap boundary read: only `(tick, norm_pos, is_valid)`.
+    fn read_lap_boundary_data_v1(&self) -> TelemetryResult<Vec<(u64, f32, i32)>> {
+        let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in self.index_entries.iter().filter(|e| e.cluster_id == CLUSTER_OTHER_CARS) {
-            out.extend(self.read_other_cars_chunk(entry)?);
+        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_SESSION) {
+            let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_SESSION)?;
+            let count = header.sample_count as usize;
+            let ticks = read_u64_column(payload, &columns, COL_SAMPLE_TICK, count)?;
+            let norms = read_f32_column(payload, &columns, COL_NORMALIZED_CAR_POSITION, count)?;
+            let valids = read_i32_column(payload, &columns, COL_IS_VALID_LAP, count)?;
+            for i in 0..count {
+                out.push((ticks[i], norms[i], valids[i]));
+            }
         }
         Ok(out)
     }
-    fn read_other_cars_chunk(&self, entry: &IndexEntry) -> TelemetryResult<Vec<OtherCarsSample>> {
-        let (header, columns, payload) = self.read_chunk_raw(entry, CLUSTER_OTHER_CARS)?;
-        decode_other_cars_payload(payload, &columns, header.sample_count as usize)
+}
+
+fn read_chunk_raw<'a>(
+    entry: &IndexEntry,
+    bytes: &'a [u8],
+    expected_cluster: u16,
+) -> TelemetryResult<(ChunkHeader, Vec<ColumnEntry>, &'a [u8])> {
+    let start = entry.file_offset as usize;
+    let end = start.saturating_add(entry.byte_len as usize);
+    if end > bytes.len() {
+        return Err(TelemetryError::InvalidFormat(format!(
+            "chunk {} points past eof",
+            entry.chunk_seq
+        )));
     }
+
+    let mut cursor = Cursor::new(&bytes[start..end]);
+    let header = ChunkHeader::read_from(&mut cursor)?;
+    if header.cluster_id != expected_cluster {
+        return Err(TelemetryError::InvalidFormat(format!(
+            "attempted to decode chunk with cluster 0x{:04x} as 0x{:04x}",
+            header.cluster_id, expected_cluster
+        )));
+    }
+
+    let mut columns = Vec::with_capacity(header.column_count as usize);
+    for _ in 0..header.column_count {
+        columns.push(ColumnEntry::read_from(&mut cursor)?);
+    }
+
+    let payload_start = start + ChunkHeader::byte_len(columns.len());
+    let payload_end = payload_start + header.payload_len as usize;
+    if payload_end > end {
+        return Err(TelemetryError::InvalidFormat(
+            "payload points past chunk".to_string(),
+        ));
+    }
+    let payload = &bytes[payload_start..payload_end];
+    if crc32(payload) != header.payload_crc32 {
+        return Err(TelemetryError::InvalidFormat(format!(
+            "payload crc mismatch in chunk {}",
+            header.chunk_seq
+        )));
+    }
+
+    Ok((header, columns, payload))
 }
 
 fn decode_metadata(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {

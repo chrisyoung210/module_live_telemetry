@@ -4,6 +4,7 @@
 //! 用户面对统一命名 `{类型}:{路径}`，录制和 dashboard 使用同一标识。
 
 use std::fmt;
+use std::str::FromStr;
 
 /// Item 类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -25,13 +26,21 @@ impl ItemType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_type(s: &str) -> Option<Self> {
         match s {
             "raw" => Some(ItemType::Raw),
             "calc" => Some(ItemType::Calculated),
             "system" => Some(ItemType::System),
             _ => None,
         }
+    }
+}
+
+impl FromStr for ItemType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_type(s).ok_or(())
     }
 }
 
@@ -62,7 +71,7 @@ impl ItemKey {
     /// 格式：`{raw|calc|system}:{name}`
     pub fn parse(key: &str) -> Option<Self> {
         let (prefix, name) = key.split_once(':')?;
-        let item_type = ItemType::from_str(prefix)?;
+        let item_type = ItemType::parse_type(prefix)?;
         if name.is_empty() {
             return None;
         }

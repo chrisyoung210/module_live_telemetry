@@ -1,7 +1,8 @@
 use module_live_telemetry::{
-    BinaryTelemetryReader, BinaryTelemetryWriter, LiveTelemetryConfig, SessionMetadata,
+    BinaryTelemetryReader, LiveTelemetryConfig, SessionMetadata,
     TelemetryFrame,
 };
+use module_live_telemetry::writer::BinaryTelemetryWriter;
 
 /// Create a TelemetryFrame with distinctive non-zero values for all 9 clusters.
 /// `seed` shifts field values so each frame is unique.

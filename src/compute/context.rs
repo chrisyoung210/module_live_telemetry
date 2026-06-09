@@ -9,7 +9,7 @@ use std::path::PathBuf;
 /// 参考数据来源标识
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReferenceSource {
-    /// acctlm 文件路径
+    /// acctlm2 文件路径
     pub file_path: PathBuf,
     /// 圈号
     pub lap_number: i32,

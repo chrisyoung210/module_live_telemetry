@@ -130,7 +130,7 @@ impl ComputeRegistry {
     /// 解析参考圈数据（自动加载，方案B）
     ///
     /// 如果缓存命中，返回共享引用（零拷贝）。
-    /// 如果缓存未命中，自动从 `.acctlm` 文件加载指定圈号的数据并缓存。
+    /// 如果缓存未命中，自动从 `.acctlm2` 文件加载指定圈号的数据并缓存。
     /// 返回 `Arc` 使得调用方可以在释放 registry 可变借用后使用数据。
     pub fn resolve_reference_lap(
         &mut self,
@@ -227,7 +227,7 @@ impl ComputeRegistry {
     }
 }
 
-/// 从 `.acctlm` 文件自动加载指定圈号的参考帧
+/// 从 `.acctlm2` 文件自动加载指定圈号的参考帧
 fn load_reference_lap_from_file(source: &ReferenceSource) -> ComputeResult<Vec<TelemetryFrame>> {
     use crate::BinaryTelemetryReader;
     use crate::types::{
@@ -332,6 +332,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     struct TestFailingItem;
     impl RealtimeComputeItem for TestFailingItem {
         fn name(&self) -> &str { "failing" }
