@@ -1,17 +1,17 @@
 // Re-export cluster IDs from format
 pub use crate::format::{
-    CLUSTER_CAR_STATE, CLUSTER_CONTROLS, CLUSTER_ENVIRONMENT, CLUSTER_MOTION,
-    CLUSTER_OTHER_CARS, CLUSTER_POWERTRAIN, CLUSTER_SESSION, CLUSTER_TIMING,
-    CLUSTER_TYRES,
+    CLUSTER_CAR_STATE, CLUSTER_CONTROLS, CLUSTER_ENVIRONMENT, CLUSTER_MOTION, CLUSTER_OTHER_CARS,
+    CLUSTER_POWERTRAIN, CLUSTER_SESSION, CLUSTER_TIMING, CLUSTER_TYRES,
 };
 
 // Helper: parse `field[index]` and return array element as f64
 fn try_array_index<T: Copy>(arr: &[T], field: &str, base_name: &str) -> Option<f64>
-where f64: From<T>
+where
+    f64: From<T>,
 {
     let prefix = format!("{}[", base_name);
     if field.starts_with(&prefix) && field.ends_with(']') {
-        let num_str = &field[prefix.len()..field.len()-1];
+        let num_str = &field[prefix.len()..field.len() - 1];
         if let Ok(idx) = num_str.parse::<usize>() {
             return arr.get(idx).map(|v| f64::from(*v));
         }
@@ -148,8 +148,18 @@ impl ControlSample {
 
     pub fn raw_field_names() -> &'static [&'static str] {
         &[
-            "sample_tick", "timestamp_ns", "physics_packet_id", "graphics_packet_id",
-            "speed_kmh", "gas", "brake", "clutch", "steer_angle", "gear", "rpms", "fuel",
+            "sample_tick",
+            "timestamp_ns",
+            "physics_packet_id",
+            "graphics_packet_id",
+            "speed_kmh",
+            "gas",
+            "brake",
+            "clutch",
+            "steer_angle",
+            "gear",
+            "rpms",
+            "fuel",
         ]
     }
 }
@@ -187,12 +197,23 @@ impl MotionSample {
 
     pub fn raw_field_names() -> &'static [&'static str] {
         &[
-            "sample_tick", "timestamp_ns",
-            "velocity[0]", "velocity[1]", "velocity[2]",
-            "acc_g[0]", "acc_g[1]", "acc_g[2]",
-            "local_velocity[0]", "local_velocity[1]", "local_velocity[2]",
-            "local_angular_vel[0]", "local_angular_vel[1]", "local_angular_vel[2]",
-            "heading", "pitch", "roll",
+            "sample_tick",
+            "timestamp_ns",
+            "velocity[0]",
+            "velocity[1]",
+            "velocity[2]",
+            "acc_g[0]",
+            "acc_g[1]",
+            "acc_g[2]",
+            "local_velocity[0]",
+            "local_velocity[1]",
+            "local_velocity[2]",
+            "local_angular_vel[0]",
+            "local_angular_vel[1]",
+            "local_angular_vel[2]",
+            "heading",
+            "pitch",
+            "roll",
         ]
     }
 }
@@ -247,10 +268,14 @@ impl TyreSample {
             _ => try_array_index(&self.wheel_slip, field, "wheel_slip")
                 .or_else(|| try_array_index(&self.wheel_load, field, "wheel_load"))
                 .or_else(|| try_array_index(&self.wheels_pressure, field, "wheels_pressure"))
-                .or_else(|| try_array_index(&self.wheel_angular_speed, field, "wheel_angular_speed"))
+                .or_else(|| {
+                    try_array_index(&self.wheel_angular_speed, field, "wheel_angular_speed")
+                })
                 .or_else(|| try_array_index(&self.tyre_wear, field, "tyre_wear"))
                 .or_else(|| try_array_index(&self.tyre_dirty_level, field, "tyre_dirty_level"))
-                .or_else(|| try_array_index(&self.tyre_core_temperature, field, "tyre_core_temperature"))
+                .or_else(|| {
+                    try_array_index(&self.tyre_core_temperature, field, "tyre_core_temperature")
+                })
                 .or_else(|| try_array_index(&self.camber_rad, field, "camber_rad"))
                 .or_else(|| try_array_index(&self.suspension_travel, field, "suspension_travel"))
                 .or_else(|| try_array_index(&self.slip_ratio, field, "slip_ratio"))
@@ -268,50 +293,150 @@ impl TyreSample {
                 .or_else(|| try_array_index(&self.pad_life, field, "pad_life"))
                 .or_else(|| try_array_index(&self.disc_life, field, "disc_life"))
                 .or_else(|| try_array_index(&self.tyre_contact_point, field, "tyre_contact_point"))
-                .or_else(|| try_array_index(&self.tyre_contact_normal, field, "tyre_contact_normal"))
-                .or_else(|| try_array_index(&self.tyre_contact_heading, field, "tyre_contact_heading")),
+                .or_else(|| {
+                    try_array_index(&self.tyre_contact_normal, field, "tyre_contact_normal")
+                })
+                .or_else(|| {
+                    try_array_index(&self.tyre_contact_heading, field, "tyre_contact_heading")
+                }),
         }
     }
 
     pub fn raw_field_names() -> &'static [&'static str] {
         &[
-            "sample_tick", "timestamp_ns",
-            "wheel_slip[0]", "wheel_slip[1]", "wheel_slip[2]", "wheel_slip[3]",
-            "wheel_load[0]", "wheel_load[1]", "wheel_load[2]", "wheel_load[3]",
-            "wheels_pressure[0]", "wheels_pressure[1]", "wheels_pressure[2]", "wheels_pressure[3]",
-            "wheel_angular_speed[0]", "wheel_angular_speed[1]", "wheel_angular_speed[2]", "wheel_angular_speed[3]",
-            "tyre_wear[0]", "tyre_wear[1]", "tyre_wear[2]", "tyre_wear[3]",
-            "tyre_dirty_level[0]", "tyre_dirty_level[1]", "tyre_dirty_level[2]", "tyre_dirty_level[3]",
-            "tyre_core_temperature[0]", "tyre_core_temperature[1]", "tyre_core_temperature[2]", "tyre_core_temperature[3]",
-            "camber_rad[0]", "camber_rad[1]", "camber_rad[2]", "camber_rad[3]",
-            "suspension_travel[0]", "suspension_travel[1]", "suspension_travel[2]", "suspension_travel[3]",
-            "slip_ratio[0]", "slip_ratio[1]", "slip_ratio[2]", "slip_ratio[3]",
-            "slip_angle[0]", "slip_angle[1]", "slip_angle[2]", "slip_angle[3]",
-            "tyre_temp_i[0]", "tyre_temp_i[1]", "tyre_temp_i[2]", "tyre_temp_i[3]",
-            "tyre_temp_m[0]", "tyre_temp_m[1]", "tyre_temp_m[2]", "tyre_temp_m[3]",
-            "tyre_temp_o[0]", "tyre_temp_o[1]", "tyre_temp_o[2]", "tyre_temp_o[3]",
-            "tyre_temp[0]", "tyre_temp[1]", "tyre_temp[2]", "tyre_temp[3]",
-            "mz[0]", "mz[1]", "mz[2]", "mz[3]",
-            "fx[0]", "fx[1]", "fx[2]", "fx[3]",
-            "fy[0]", "fy[1]", "fy[2]", "fy[3]",
-            "suspension_damage[0]", "suspension_damage[1]", "suspension_damage[2]", "suspension_damage[3]",
-            "brake_temp[0]", "brake_temp[1]", "brake_temp[2]", "brake_temp[3]",
-            "brake_pressure[0]", "brake_pressure[1]", "brake_pressure[2]", "brake_pressure[3]",
-            "pad_life[0]", "pad_life[1]", "pad_life[2]", "pad_life[3]",
-            "disc_life[0]", "disc_life[1]", "disc_life[2]", "disc_life[3]",
-            "tyre_contact_point[0]", "tyre_contact_point[1]", "tyre_contact_point[2]",
-            "tyre_contact_point[3]", "tyre_contact_point[4]", "tyre_contact_point[5]",
-            "tyre_contact_point[6]", "tyre_contact_point[7]", "tyre_contact_point[8]",
-            "tyre_contact_point[9]", "tyre_contact_point[10]", "tyre_contact_point[11]",
-            "tyre_contact_normal[0]", "tyre_contact_normal[1]", "tyre_contact_normal[2]",
-            "tyre_contact_normal[3]", "tyre_contact_normal[4]", "tyre_contact_normal[5]",
-            "tyre_contact_normal[6]", "tyre_contact_normal[7]", "tyre_contact_normal[8]",
-            "tyre_contact_normal[9]", "tyre_contact_normal[10]", "tyre_contact_normal[11]",
-            "tyre_contact_heading[0]", "tyre_contact_heading[1]", "tyre_contact_heading[2]",
-            "tyre_contact_heading[3]", "tyre_contact_heading[4]", "tyre_contact_heading[5]",
-            "tyre_contact_heading[6]", "tyre_contact_heading[7]", "tyre_contact_heading[8]",
-            "tyre_contact_heading[9]", "tyre_contact_heading[10]", "tyre_contact_heading[11]",
-            "number_of_tyres_out", "front_brake_compound", "rear_brake_compound",
+            "sample_tick",
+            "timestamp_ns",
+            "wheel_slip[0]",
+            "wheel_slip[1]",
+            "wheel_slip[2]",
+            "wheel_slip[3]",
+            "wheel_load[0]",
+            "wheel_load[1]",
+            "wheel_load[2]",
+            "wheel_load[3]",
+            "wheels_pressure[0]",
+            "wheels_pressure[1]",
+            "wheels_pressure[2]",
+            "wheels_pressure[3]",
+            "wheel_angular_speed[0]",
+            "wheel_angular_speed[1]",
+            "wheel_angular_speed[2]",
+            "wheel_angular_speed[3]",
+            "tyre_wear[0]",
+            "tyre_wear[1]",
+            "tyre_wear[2]",
+            "tyre_wear[3]",
+            "tyre_dirty_level[0]",
+            "tyre_dirty_level[1]",
+            "tyre_dirty_level[2]",
+            "tyre_dirty_level[3]",
+            "tyre_core_temperature[0]",
+            "tyre_core_temperature[1]",
+            "tyre_core_temperature[2]",
+            "tyre_core_temperature[3]",
+            "camber_rad[0]",
+            "camber_rad[1]",
+            "camber_rad[2]",
+            "camber_rad[3]",
+            "suspension_travel[0]",
+            "suspension_travel[1]",
+            "suspension_travel[2]",
+            "suspension_travel[3]",
+            "slip_ratio[0]",
+            "slip_ratio[1]",
+            "slip_ratio[2]",
+            "slip_ratio[3]",
+            "slip_angle[0]",
+            "slip_angle[1]",
+            "slip_angle[2]",
+            "slip_angle[3]",
+            "tyre_temp_i[0]",
+            "tyre_temp_i[1]",
+            "tyre_temp_i[2]",
+            "tyre_temp_i[3]",
+            "tyre_temp_m[0]",
+            "tyre_temp_m[1]",
+            "tyre_temp_m[2]",
+            "tyre_temp_m[3]",
+            "tyre_temp_o[0]",
+            "tyre_temp_o[1]",
+            "tyre_temp_o[2]",
+            "tyre_temp_o[3]",
+            "tyre_temp[0]",
+            "tyre_temp[1]",
+            "tyre_temp[2]",
+            "tyre_temp[3]",
+            "mz[0]",
+            "mz[1]",
+            "mz[2]",
+            "mz[3]",
+            "fx[0]",
+            "fx[1]",
+            "fx[2]",
+            "fx[3]",
+            "fy[0]",
+            "fy[1]",
+            "fy[2]",
+            "fy[3]",
+            "suspension_damage[0]",
+            "suspension_damage[1]",
+            "suspension_damage[2]",
+            "suspension_damage[3]",
+            "brake_temp[0]",
+            "brake_temp[1]",
+            "brake_temp[2]",
+            "brake_temp[3]",
+            "brake_pressure[0]",
+            "brake_pressure[1]",
+            "brake_pressure[2]",
+            "brake_pressure[3]",
+            "pad_life[0]",
+            "pad_life[1]",
+            "pad_life[2]",
+            "pad_life[3]",
+            "disc_life[0]",
+            "disc_life[1]",
+            "disc_life[2]",
+            "disc_life[3]",
+            "tyre_contact_point[0]",
+            "tyre_contact_point[1]",
+            "tyre_contact_point[2]",
+            "tyre_contact_point[3]",
+            "tyre_contact_point[4]",
+            "tyre_contact_point[5]",
+            "tyre_contact_point[6]",
+            "tyre_contact_point[7]",
+            "tyre_contact_point[8]",
+            "tyre_contact_point[9]",
+            "tyre_contact_point[10]",
+            "tyre_contact_point[11]",
+            "tyre_contact_normal[0]",
+            "tyre_contact_normal[1]",
+            "tyre_contact_normal[2]",
+            "tyre_contact_normal[3]",
+            "tyre_contact_normal[4]",
+            "tyre_contact_normal[5]",
+            "tyre_contact_normal[6]",
+            "tyre_contact_normal[7]",
+            "tyre_contact_normal[8]",
+            "tyre_contact_normal[9]",
+            "tyre_contact_normal[10]",
+            "tyre_contact_normal[11]",
+            "tyre_contact_heading[0]",
+            "tyre_contact_heading[1]",
+            "tyre_contact_heading[2]",
+            "tyre_contact_heading[3]",
+            "tyre_contact_heading[4]",
+            "tyre_contact_heading[5]",
+            "tyre_contact_heading[6]",
+            "tyre_contact_heading[7]",
+            "tyre_contact_heading[8]",
+            "tyre_contact_heading[9]",
+            "tyre_contact_heading[10]",
+            "tyre_contact_heading[11]",
+            "number_of_tyres_out",
+            "front_brake_compound",
+            "rear_brake_compound",
         ]
     }
 }
@@ -380,12 +505,29 @@ impl PowertrainSample {
 
     pub fn raw_field_names() -> &'static [&'static str] {
         &[
-            "sample_tick", "timestamp_ns",
-            "turbo_boost", "ballast", "kers_charge", "kers_input", "kers_current_kj",
-            "drs", "tc", "abs", "engine_brake",
-            "ers_recovery_level", "ers_power_level", "ers_heat_charging", "ers_is_charging",
-            "drs_available", "drs_enabled", "tc_in_action", "abs_in_action",
-            "auto_shifter_on", "current_max_rpm", "p2p_activations", "p2p_status",
+            "sample_tick",
+            "timestamp_ns",
+            "turbo_boost",
+            "ballast",
+            "kers_charge",
+            "kers_input",
+            "kers_current_kj",
+            "drs",
+            "tc",
+            "abs",
+            "engine_brake",
+            "ers_recovery_level",
+            "ers_power_level",
+            "ers_heat_charging",
+            "ers_is_charging",
+            "drs_available",
+            "drs_enabled",
+            "tc_in_action",
+            "abs_in_action",
+            "auto_shifter_on",
+            "current_max_rpm",
+            "p2p_activations",
+            "p2p_status",
             "water_temp",
         ]
     }
@@ -470,16 +612,37 @@ impl SessionSample {
 
     pub fn raw_field_names() -> &'static [&'static str] {
         &[
-            "sample_tick", "timestamp_ns",
-            "status", "session", "session_index",
-            "completed_laps", "position", "session_time_left", "number_of_laps",
-            "current_sector_index", "normalized_car_position",
-            "is_in_pit", "is_in_pit_lane", "mandatory_pit_done", "missing_mandatory_pits",
-            "penalty_time", "penalty_type",
-            "clock", "replay_time_multiplier", "is_valid_lap",
-            "global_yellow", "global_yellow1", "global_yellow2", "global_yellow3",
-            "global_white", "global_green", "global_chequered", "global_red",
-            "gap_ahead_or_tail_value", "flag", "gap_behind",
+            "sample_tick",
+            "timestamp_ns",
+            "status",
+            "session",
+            "session_index",
+            "completed_laps",
+            "position",
+            "session_time_left",
+            "number_of_laps",
+            "current_sector_index",
+            "normalized_car_position",
+            "is_in_pit",
+            "is_in_pit_lane",
+            "mandatory_pit_done",
+            "missing_mandatory_pits",
+            "penalty_time",
+            "penalty_type",
+            "clock",
+            "replay_time_multiplier",
+            "is_valid_lap",
+            "global_yellow",
+            "global_yellow1",
+            "global_yellow2",
+            "global_yellow3",
+            "global_white",
+            "global_green",
+            "global_chequered",
+            "global_red",
+            "gap_ahead_or_tail_value",
+            "flag",
+            "gap_behind",
         ]
     }
 }
@@ -536,11 +699,21 @@ impl TimingSample {
 
     pub fn raw_field_names() -> &'static [&'static str] {
         &[
-            "sample_tick", "timestamp_ns",
-            "i_current_time", "i_last_time", "i_best_time", "i_split",
-            "last_sector_time", "i_delta_lap_time", "is_delta_positive",
-            "i_estimated_lap_time", "fuel_estimated_laps", "fuel_x_lap",
-            "used_fuel", "distance_traveled", "observed_slot_before_i_split",
+            "sample_tick",
+            "timestamp_ns",
+            "i_current_time",
+            "i_last_time",
+            "i_best_time",
+            "i_split",
+            "last_sector_time",
+            "i_delta_lap_time",
+            "is_delta_positive",
+            "i_estimated_lap_time",
+            "fuel_estimated_laps",
+            "fuel_x_lap",
+            "used_fuel",
+            "distance_traveled",
+            "observed_slot_before_i_split",
         ]
     }
 }
@@ -644,22 +817,55 @@ impl CarStateSample {
 
     pub fn raw_field_names() -> &'static [&'static str] {
         &[
-            "sample_tick", "timestamp_ns",
-            "car_damage[0]", "car_damage[1]", "car_damage[2]", "car_damage[3]", "car_damage[4]",
+            "sample_tick",
+            "timestamp_ns",
+            "car_damage[0]",
+            "car_damage[1]",
+            "car_damage[2]",
+            "car_damage[3]",
+            "car_damage[4]",
             "pit_limiter_on",
-            "ride_height[0]", "ride_height[1]",
-            "ignition_on", "starter_engine_on", "is_engine_running", "is_ai_controlled",
-            "cg_height", "brake_bias", "rain_lights", "flashing_lights", "lights_stage",
-            "wiper_lv", "driver_stint_total_time_left", "driver_stint_time_left",
-            "rain_tyres", "current_tyre_set", "strategy_tyre_set", "track_grip_status",
-            "mfd_tyre_set", "mfd_fuel_to_add",
-            "mfd_tyre_pressure[0]", "mfd_tyre_pressure[1]", "mfd_tyre_pressure[2]", "mfd_tyre_pressure[3]",
-            "ideal_line_on", "is_setup_menu_visible",
-            "main_display_index", "secondary_display_index",
-            "direction_lights_left", "direction_lights_right",
-            "tc_level", "tc_cut", "engine_map", "abs_level",
-            "exhaust_temperature", "final_ff", "performance_meter",
-            "kerb_vibration", "slip_vibrations", "g_vibrations", "abs_vibrations",
+            "ride_height[0]",
+            "ride_height[1]",
+            "ignition_on",
+            "starter_engine_on",
+            "is_engine_running",
+            "is_ai_controlled",
+            "cg_height",
+            "brake_bias",
+            "rain_lights",
+            "flashing_lights",
+            "lights_stage",
+            "wiper_lv",
+            "driver_stint_total_time_left",
+            "driver_stint_time_left",
+            "rain_tyres",
+            "current_tyre_set",
+            "strategy_tyre_set",
+            "track_grip_status",
+            "mfd_tyre_set",
+            "mfd_fuel_to_add",
+            "mfd_tyre_pressure[0]",
+            "mfd_tyre_pressure[1]",
+            "mfd_tyre_pressure[2]",
+            "mfd_tyre_pressure[3]",
+            "ideal_line_on",
+            "is_setup_menu_visible",
+            "main_display_index",
+            "secondary_display_index",
+            "direction_lights_left",
+            "direction_lights_right",
+            "tc_level",
+            "tc_cut",
+            "engine_map",
+            "abs_level",
+            "exhaust_temperature",
+            "final_ff",
+            "performance_meter",
+            "kerb_vibration",
+            "slip_vibrations",
+            "g_vibrations",
+            "abs_vibrations",
         ]
     }
 }
@@ -702,10 +908,17 @@ impl EnvironmentSample {
 
     pub fn raw_field_names() -> &'static [&'static str] {
         &[
-            "sample_tick", "timestamp_ns",
-            "air_density", "air_temp", "road_temp",
-            "wind_speed", "wind_direction", "surface_grip",
-            "rain_intensity", "rain_intensity_in_10min", "rain_intensity_in_30min",
+            "sample_tick",
+            "timestamp_ns",
+            "air_density",
+            "air_temp",
+            "road_temp",
+            "wind_speed",
+            "wind_direction",
+            "surface_grip",
+            "rain_intensity",
+            "rain_intensity_in_10min",
+            "rain_intensity_in_30min",
         ]
     }
 }
@@ -735,7 +948,12 @@ impl OtherCarsSample {
     }
 
     pub fn raw_field_names() -> &'static [&'static str] {
-        &["sample_tick", "timestamp_ns", "active_cars", "player_car_id"]
+        &[
+            "sample_tick",
+            "timestamp_ns",
+            "active_cars",
+            "player_car_id",
+        ]
     }
 }
 
@@ -815,30 +1033,243 @@ impl AccSessionKind {
 // ---- Default implementations ----
 impl Default for ControlSample {
     fn default() -> Self {
-        Self { sample_tick: 0, timestamp_ns: 0, physics_packet_id: 0, graphics_packet_id: 0, speed_kmh: 0.0, gas: 0.0, brake: 0.0, clutch: 0.0, steer_angle: 0.0, gear: 0, rpms: 0, fuel: 0.0 }
+        Self {
+            sample_tick: 0,
+            timestamp_ns: 0,
+            physics_packet_id: 0,
+            graphics_packet_id: 0,
+            speed_kmh: 0.0,
+            gas: 0.0,
+            brake: 0.0,
+            clutch: 0.0,
+            steer_angle: 0.0,
+            gear: 0,
+            rpms: 0,
+            fuel: 0.0,
+        }
     }
 }
 impl Default for MotionSample {
-    fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, velocity: [0.0; 3], acc_g: [0.0; 3], local_velocity: [0.0; 3], local_angular_vel: [0.0; 3], heading: 0.0, pitch: 0.0, roll: 0.0 } }
+    fn default() -> Self {
+        Self {
+            sample_tick: 0,
+            timestamp_ns: 0,
+            velocity: [0.0; 3],
+            acc_g: [0.0; 3],
+            local_velocity: [0.0; 3],
+            local_angular_vel: [0.0; 3],
+            heading: 0.0,
+            pitch: 0.0,
+            roll: 0.0,
+        }
+    }
 }
 impl Default for TyreSample {
-    fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, wheel_slip: [0.0; 4], wheel_load: [0.0; 4], wheels_pressure: [0.0; 4], wheel_angular_speed: [0.0; 4], tyre_wear: [0.0; 4], tyre_dirty_level: [0.0; 4], tyre_core_temperature: [0.0; 4], camber_rad: [0.0; 4], suspension_travel: [0.0; 4], slip_ratio: [0.0; 4], slip_angle: [0.0; 4], tyre_temp_i: [0.0; 4], tyre_temp_m: [0.0; 4], tyre_temp_o: [0.0; 4], tyre_temp: [0.0; 4], mz: [0.0; 4], fx: [0.0; 4], fy: [0.0; 4], suspension_damage: [0.0; 4], brake_temp: [0.0; 4], brake_pressure: [0.0; 4], pad_life: [0.0; 4], disc_life: [0.0; 4], tyre_contact_point: [0.0; 12], tyre_contact_normal: [0.0; 12], tyre_contact_heading: [0.0; 12], number_of_tyres_out: 0, front_brake_compound: 0, rear_brake_compound: 0 } }
+    fn default() -> Self {
+        Self {
+            sample_tick: 0,
+            timestamp_ns: 0,
+            wheel_slip: [0.0; 4],
+            wheel_load: [0.0; 4],
+            wheels_pressure: [0.0; 4],
+            wheel_angular_speed: [0.0; 4],
+            tyre_wear: [0.0; 4],
+            tyre_dirty_level: [0.0; 4],
+            tyre_core_temperature: [0.0; 4],
+            camber_rad: [0.0; 4],
+            suspension_travel: [0.0; 4],
+            slip_ratio: [0.0; 4],
+            slip_angle: [0.0; 4],
+            tyre_temp_i: [0.0; 4],
+            tyre_temp_m: [0.0; 4],
+            tyre_temp_o: [0.0; 4],
+            tyre_temp: [0.0; 4],
+            mz: [0.0; 4],
+            fx: [0.0; 4],
+            fy: [0.0; 4],
+            suspension_damage: [0.0; 4],
+            brake_temp: [0.0; 4],
+            brake_pressure: [0.0; 4],
+            pad_life: [0.0; 4],
+            disc_life: [0.0; 4],
+            tyre_contact_point: [0.0; 12],
+            tyre_contact_normal: [0.0; 12],
+            tyre_contact_heading: [0.0; 12],
+            number_of_tyres_out: 0,
+            front_brake_compound: 0,
+            rear_brake_compound: 0,
+        }
+    }
 }
 impl Default for PowertrainSample {
-    fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, turbo_boost: 0.0, ballast: 0.0, kers_charge: 0.0, kers_input: 0.0, kers_current_kj: 0.0, drs: 0.0, tc: 0.0, abs: 0.0, engine_brake: 0, ers_recovery_level: 0, ers_power_level: 0, ers_heat_charging: 0, ers_is_charging: 0, drs_available: 0, drs_enabled: 0, tc_in_action: 0, abs_in_action: 0, auto_shifter_on: 0, current_max_rpm: 0, p2p_activations: 0, p2p_status: 0, water_temp: 0.0 } }
+    fn default() -> Self {
+        Self {
+            sample_tick: 0,
+            timestamp_ns: 0,
+            turbo_boost: 0.0,
+            ballast: 0.0,
+            kers_charge: 0.0,
+            kers_input: 0.0,
+            kers_current_kj: 0.0,
+            drs: 0.0,
+            tc: 0.0,
+            abs: 0.0,
+            engine_brake: 0,
+            ers_recovery_level: 0,
+            ers_power_level: 0,
+            ers_heat_charging: 0,
+            ers_is_charging: 0,
+            drs_available: 0,
+            drs_enabled: 0,
+            tc_in_action: 0,
+            abs_in_action: 0,
+            auto_shifter_on: 0,
+            current_max_rpm: 0,
+            p2p_activations: 0,
+            p2p_status: 0,
+            water_temp: 0.0,
+        }
+    }
 }
 impl Default for SessionSample {
-    fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, status: 0, session: 0, session_index: 0, completed_laps: 0, position: 0, session_time_left: 0.0, number_of_laps: 0, current_sector_index: 0, normalized_car_position: 0.0, is_in_pit: 0, is_in_pit_lane: 0, mandatory_pit_done: 0, missing_mandatory_pits: 0, penalty_time: 0.0, penalty_type: 0, track_status: [0u16; 33], clock: 0.0, replay_time_multiplier: 0.0, is_valid_lap: 0, global_yellow: 0, global_yellow1: 0, global_yellow2: 0, global_yellow3: 0, global_white: 0, global_green: 0, global_chequered: 0, global_red: 0, gap_ahead_or_tail_value: 0, flag: 0, gap_behind: 0 } }
+    fn default() -> Self {
+        Self {
+            sample_tick: 0,
+            timestamp_ns: 0,
+            status: 0,
+            session: 0,
+            session_index: 0,
+            completed_laps: 0,
+            position: 0,
+            session_time_left: 0.0,
+            number_of_laps: 0,
+            current_sector_index: 0,
+            normalized_car_position: 0.0,
+            is_in_pit: 0,
+            is_in_pit_lane: 0,
+            mandatory_pit_done: 0,
+            missing_mandatory_pits: 0,
+            penalty_time: 0.0,
+            penalty_type: 0,
+            track_status: [0u16; 33],
+            clock: 0.0,
+            replay_time_multiplier: 0.0,
+            is_valid_lap: 0,
+            global_yellow: 0,
+            global_yellow1: 0,
+            global_yellow2: 0,
+            global_yellow3: 0,
+            global_white: 0,
+            global_green: 0,
+            global_chequered: 0,
+            global_red: 0,
+            gap_ahead_or_tail_value: 0,
+            flag: 0,
+            gap_behind: 0,
+        }
+    }
 }
 impl Default for TimingSample {
-    fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, i_current_time: 0, i_last_time: 0, i_best_time: 0, i_split: 0, last_sector_time: 0, i_delta_lap_time: 0, is_delta_positive: 0, i_estimated_lap_time: 0, fuel_estimated_laps: 0.0, fuel_x_lap: 0.0, used_fuel: 0.0, distance_traveled: 0.0, current_time_str: [0u16; 15], last_time_str: [0u16; 15], best_time_str: [0u16; 15], split_str: [0u16; 15], delta_lap_time_str: [0u16; 15], estimated_lap_time_str: [0u16; 15], observed_slot_before_i_split: 0 } }
+    fn default() -> Self {
+        Self {
+            sample_tick: 0,
+            timestamp_ns: 0,
+            i_current_time: 0,
+            i_last_time: 0,
+            i_best_time: 0,
+            i_split: 0,
+            last_sector_time: 0,
+            i_delta_lap_time: 0,
+            is_delta_positive: 0,
+            i_estimated_lap_time: 0,
+            fuel_estimated_laps: 0.0,
+            fuel_x_lap: 0.0,
+            used_fuel: 0.0,
+            distance_traveled: 0.0,
+            current_time_str: [0u16; 15],
+            last_time_str: [0u16; 15],
+            best_time_str: [0u16; 15],
+            split_str: [0u16; 15],
+            delta_lap_time_str: [0u16; 15],
+            estimated_lap_time_str: [0u16; 15],
+            observed_slot_before_i_split: 0,
+        }
+    }
 }
 impl Default for CarStateSample {
-    fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, car_damage: [0.0; 5], pit_limiter_on: 0, ride_height: [0.0; 2], ignition_on: 0, starter_engine_on: 0, is_engine_running: 0, is_ai_controlled: 0, cg_height: 0.0, brake_bias: 0.0, rain_lights: 0, flashing_lights: 0, lights_stage: 0, wiper_lv: 0, driver_stint_total_time_left: 0, driver_stint_time_left: 0, rain_tyres: 0, current_tyre_set: 0, strategy_tyre_set: 0, track_grip_status: 0, tyre_compound_str: [0u16; 33], mfd_tyre_set: 0, mfd_fuel_to_add: 0.0, mfd_tyre_pressure: [0.0; 4], ideal_line_on: 0, is_setup_menu_visible: 0, main_display_index: 0, secondary_display_index: 0, direction_lights_left: 0, direction_lights_right: 0, tc_level: 0, tc_cut: 0, engine_map: 0, abs_level: 0, exhaust_temperature: 0.0, final_ff: 0.0, performance_meter: 0.0, kerb_vibration: 0.0, slip_vibrations: 0.0, g_vibrations: 0.0, abs_vibrations: 0.0 } }
+    fn default() -> Self {
+        Self {
+            sample_tick: 0,
+            timestamp_ns: 0,
+            car_damage: [0.0; 5],
+            pit_limiter_on: 0,
+            ride_height: [0.0; 2],
+            ignition_on: 0,
+            starter_engine_on: 0,
+            is_engine_running: 0,
+            is_ai_controlled: 0,
+            cg_height: 0.0,
+            brake_bias: 0.0,
+            rain_lights: 0,
+            flashing_lights: 0,
+            lights_stage: 0,
+            wiper_lv: 0,
+            driver_stint_total_time_left: 0,
+            driver_stint_time_left: 0,
+            rain_tyres: 0,
+            current_tyre_set: 0,
+            strategy_tyre_set: 0,
+            track_grip_status: 0,
+            tyre_compound_str: [0u16; 33],
+            mfd_tyre_set: 0,
+            mfd_fuel_to_add: 0.0,
+            mfd_tyre_pressure: [0.0; 4],
+            ideal_line_on: 0,
+            is_setup_menu_visible: 0,
+            main_display_index: 0,
+            secondary_display_index: 0,
+            direction_lights_left: 0,
+            direction_lights_right: 0,
+            tc_level: 0,
+            tc_cut: 0,
+            engine_map: 0,
+            abs_level: 0,
+            exhaust_temperature: 0.0,
+            final_ff: 0.0,
+            performance_meter: 0.0,
+            kerb_vibration: 0.0,
+            slip_vibrations: 0.0,
+            g_vibrations: 0.0,
+            abs_vibrations: 0.0,
+        }
+    }
 }
 impl Default for EnvironmentSample {
-    fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, air_density: 0.0, air_temp: 0.0, road_temp: 0.0, wind_speed: 0.0, wind_direction: 0.0, surface_grip: 0.0, rain_intensity: 0, rain_intensity_in_10min: 0, rain_intensity_in_30min: 0 } }
+    fn default() -> Self {
+        Self {
+            sample_tick: 0,
+            timestamp_ns: 0,
+            air_density: 0.0,
+            air_temp: 0.0,
+            road_temp: 0.0,
+            wind_speed: 0.0,
+            wind_direction: 0.0,
+            surface_grip: 0.0,
+            rain_intensity: 0,
+            rain_intensity_in_10min: 0,
+            rain_intensity_in_30min: 0,
+        }
+    }
 }
 impl Default for OtherCarsSample {
-    fn default() -> Self { Self { sample_tick: 0, timestamp_ns: 0, active_cars: 0, player_car_id: 0, car_coordinates: vec![0.0f32; 180], car_id: vec![0i32; 60] } }
+    fn default() -> Self {
+        Self {
+            sample_tick: 0,
+            timestamp_ns: 0,
+            active_cars: 0,
+            player_car_id: 0,
+            car_coordinates: vec![0.0f32; 180],
+            car_id: vec![0i32; 60],
+        }
+    }
 }

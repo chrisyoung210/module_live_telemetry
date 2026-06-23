@@ -10,6 +10,9 @@ pub enum RecordingStatus {
     /// `thread_id` is the OS thread ID for monitoring.
     Started { thread_id: u64 },
 
+    /// Recording service is waiting for ACC shared memory to appear.
+    WaitingForSharedMemory { message: String },
+
     /// ACC shared memory connected — ready to record once ACC goes Live.
     Connected,
 
@@ -30,6 +33,9 @@ pub enum RecordingStatus {
 
     /// ACC is paused; recording suspended but writer kept open.
     Paused,
+
+    /// Replay of recorded telemetry has started.
+    ReplayStarted,
 
     /// An error occurred. Recording may continue or stop depending on severity.
     Error {
@@ -68,6 +74,8 @@ pub enum StopReason {
     SessionEnd,
     /// ACC shared memory was lost.
     ShmemLost,
+    /// All available frames have been replayed.
+    FramesExhausted,
 }
 
 impl fmt::Display for StopReason {
@@ -76,6 +84,7 @@ impl fmt::Display for StopReason {
             Self::Manual => write!(f, "manual stop"),
             Self::SessionEnd => write!(f, "session ended"),
             Self::ShmemLost => write!(f, "shared memory lost"),
+            Self::FramesExhausted => write!(f, "frames exhausted"),
         }
     }
 }
@@ -100,6 +109,9 @@ mod tests {
     #[test]
     fn test_status_variants_constructible() {
         let started = RecordingStatus::Started { thread_id: 42 };
+        let _waiting = RecordingStatus::WaitingForSharedMemory {
+            message: "ACC not available".into(),
+        };
         let _connected = RecordingStatus::Connected;
         let _rec_started = RecordingStatus::RecordingStarted;
         let running = RecordingStatus::Running {
@@ -147,5 +159,28 @@ mod tests {
             format!("{}", RecordingErrorKind::ShmemDisconnected),
             "shared memory disconnected"
         );
+    }
+
+    #[test]
+    fn test_replay_started_variant() {
+        let replay_started = RecordingStatus::ReplayStarted;
+        let debug = format!("{:?}", replay_started);
+        assert_eq!(debug, "ReplayStarted");
+    }
+
+    #[test]
+    fn test_frames_exhausted_display() {
+        assert_eq!(
+            format!("{}", StopReason::FramesExhausted),
+            "frames exhausted"
+        );
+    }
+
+    #[test]
+    fn test_existing_stop_reasons_unaffected() {
+        // Verify existing Display variants are unchanged
+        assert_eq!(format!("{}", StopReason::Manual), "manual stop");
+        assert_eq!(format!("{}", StopReason::SessionEnd), "session ended");
+        assert_eq!(format!("{}", StopReason::ShmemLost), "shared memory lost");
     }
 }

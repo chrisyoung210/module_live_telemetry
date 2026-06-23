@@ -42,6 +42,40 @@ impl ComputeRegistry {
         }
     }
 
+    /// Create a registry with all builtin realtime dashboard items registered.
+    pub fn with_builtin_dashboard_items() -> ComputeResult<Self> {
+        let mut registry = Self::new();
+        registry.register_builtin_dashboard_items()?;
+        Ok(registry)
+    }
+
+    /// Register all builtin realtime dashboard items.
+    pub fn register_builtin_dashboard_items(&mut self) -> ComputeResult<()> {
+        use super::items::{
+            create_prev_sector_items, create_sector_best_items, CarCoordX, CarCoordZ,
+            DeltaTimeToLifeBestLap,
+            DeltaTimeToSessionBestLap, DeltaTimeToSessionBestLapInterpolated,
+        };
+
+        self.register_calc_realtime(Box::new(DeltaTimeToLifeBestLap::new()))?;
+        self.register_calc_realtime(Box::new(DeltaTimeToSessionBestLap::new()))?;
+        self.register_calc_realtime(Box::new(DeltaTimeToSessionBestLapInterpolated::new()))?;
+
+        self.register_calc_realtime(Box::new(CarCoordX::new()))?;
+        self.register_calc_realtime(Box::new(CarCoordZ::new()))?;
+
+        let (prev_sector_time, prev_sector_number) = create_prev_sector_items();
+        self.register_calc_realtime(Box::new(prev_sector_time))?;
+        self.register_calc_realtime(Box::new(prev_sector_number))?;
+
+        let (sector_best_1, sector_best_2, sector_best_3) = create_sector_best_items();
+        self.register_calc_realtime(Box::new(sector_best_1))?;
+        self.register_calc_realtime(Box::new(sector_best_2))?;
+        self.register_calc_realtime(Box::new(sector_best_3))?;
+
+        Ok(())
+    }
+
     /// 注册 calculated 实时计算项
     ///
     /// # 校验规则
@@ -65,7 +99,8 @@ impl ComputeRegistry {
         let name = name.to_string();
         if self.realtime_calc.contains_key(&name) || self.batch_calc.contains_key(&name) {
             return Err(ComputeError::InvalidRegistration(format!(
-                "计算项 '{}' 已注册", name
+                "计算项 '{}' 已注册",
+                name
             )));
         }
         self.realtime_calc.insert(name, item);
@@ -75,10 +110,7 @@ impl ComputeRegistry {
     /// 注册 calculated 批量计算项
     ///
     /// 校验规则同 [`register_calc_realtime`]。
-    pub fn register_calc_batch(
-        &mut self,
-        item: Box<dyn BatchComputeItem>,
-    ) -> ComputeResult<()> {
+    pub fn register_calc_batch(&mut self, item: Box<dyn BatchComputeItem>) -> ComputeResult<()> {
         let name = item.name();
         if name.is_empty() {
             return Err(ComputeError::InvalidRegistration(
@@ -88,7 +120,8 @@ impl ComputeRegistry {
         let name = name.to_string();
         if self.realtime_calc.contains_key(&name) || self.batch_calc.contains_key(&name) {
             return Err(ComputeError::InvalidRegistration(format!(
-                "计算项 '{}' 已注册", name
+                "计算项 '{}' 已注册",
+                name
             )));
         }
         self.batch_calc.insert(name, item);
@@ -99,8 +132,7 @@ impl ComputeRegistry {
     ///
     /// 返回 true 表示找到并移除了该项，false 表示未找到。
     pub fn unregister(&mut self, name: &str) -> bool {
-        self.realtime_calc.remove(name).is_some()
-            || self.batch_calc.remove(name).is_some()
+        self.realtime_calc.remove(name).is_some() || self.batch_calc.remove(name).is_some()
     }
 
     /// 按名称执行单个 calculated 实时计算项
@@ -140,7 +172,17 @@ impl ComputeRegistry {
             return Ok(Arc::clone(arc));
         }
 
+        if source.is_session_best() {
+            return Err(ComputeError::NoValidData);
+        }
+
+        eprintln!(
+            "compute registry: loading reference lap path='{}' lap={}",
+            source.file_path.display(),
+            source.lap_number
+        );
         let frames = load_reference_lap_from_file(source)?;
+        let frame_count = frames.len();
         let arc = Arc::new(frames);
 
         // Evict if full before inserting
@@ -151,7 +193,14 @@ impl ComputeRegistry {
                 self.reference_cache.remove(&key);
             }
         }
-        self.reference_cache.insert(source.clone(), Arc::clone(&arc));
+        self.reference_cache
+            .insert(source.clone(), Arc::clone(&arc));
+        eprintln!(
+            "compute registry: cached reference lap path='{}' lap={} frames={}",
+            source.file_path.display(),
+            source.lap_number,
+            frame_count
+        );
         Ok(arc)
     }
 
@@ -174,6 +223,7 @@ impl ComputeRegistry {
     ///
     /// 如果缓存已满（max `MAX_CACHE_ENTRIES`），淘汰一个已有条目后插入新数据。
     pub fn cache_reference_lap(&mut self, source: ReferenceSource, frames: Vec<TelemetryFrame>) {
+        let frame_count = frames.len();
         if self.reference_cache.len() >= MAX_CACHE_ENTRIES
             && !self.reference_cache.contains_key(&source)
         {
@@ -182,7 +232,14 @@ impl ComputeRegistry {
                 self.reference_cache.remove(&key);
             }
         }
-        self.reference_cache.insert(source, Arc::new(frames));
+        self.reference_cache
+            .insert(source.clone(), Arc::new(frames));
+        eprintln!(
+            "compute registry: cache_reference_lap path='{}' lap={} frames={}",
+            source.file_path.display(),
+            source.lap_number,
+            frame_count
+        );
     }
 
     /// 替换参考圈数据（直接覆盖，不清除其他缓存条目）
@@ -190,7 +247,15 @@ impl ComputeRegistry {
     /// 与 [`cache_reference_lap`] 不同，此方法不会触发 LRU 淘汰。
     /// 适用于运行时用更快圈速替换参考圈的场景。
     pub fn replace_reference(&mut self, source: ReferenceSource, frames: Vec<TelemetryFrame>) {
-        self.reference_cache.insert(source, Arc::new(frames));
+        let frame_count = frames.len();
+        self.reference_cache
+            .insert(source.clone(), Arc::new(frames));
+        eprintln!(
+            "compute registry: replace_reference path='{}' lap={} frames={}",
+            source.file_path.display(),
+            source.lap_number,
+            frame_count
+        );
     }
 
     /// 获取已缓存的参考圈数据
@@ -229,11 +294,11 @@ impl ComputeRegistry {
 
 /// 从 `.acctlm2` 文件自动加载指定圈号的参考帧
 fn load_reference_lap_from_file(source: &ReferenceSource) -> ComputeResult<Vec<TelemetryFrame>> {
-    use crate::BinaryTelemetryReader;
     use crate::types::{
-        CarStateSample, ControlSample, EnvironmentSample, MotionSample,
-        OtherCarsSample, PowertrainSample, TimingSample, TyreSample,
+        CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
+        PowertrainSample, TimingSample, TyreSample,
     };
+    use crate::BinaryTelemetryReader;
 
     let reader = BinaryTelemetryReader::open(&source.file_path)?;
     let lap_entries = reader.lap_index();
@@ -283,8 +348,14 @@ fn load_reference_lap_from_file(source: &ReferenceSource) -> ComputeResult<Vec<T
 
     // Build frames from aligned clusters
     let max_len = [
-        controls.len(), motion.len(), tyres.len(), powertrain.len(),
-        timing.len(), car_state.len(), environment.len(), other_cars.len(),
+        controls.len(),
+        motion.len(),
+        tyres.len(),
+        powertrain.len(),
+        timing.len(),
+        car_state.len(),
+        environment.len(),
+        other_cars.len(),
     ]
     .into_iter()
     .max()
@@ -318,15 +389,17 @@ fn load_reference_lap_from_file(source: &ReferenceSource) -> ComputeResult<Vec<T
 mod tests {
     use super::*;
     use crate::types::{
-        CarStateSample, ControlSample, EnvironmentSample, MotionSample,
-        OtherCarsSample, PowertrainSample, SessionSample, TimingSample, TyreSample,
+        CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
+        PowertrainSample, SessionSample, TimingSample, TyreSample,
     };
 
     // ---- Test items ----
 
     struct TestItem;
     impl RealtimeComputeItem for TestItem {
-        fn name(&self) -> &str { "test_item" }
+        fn name(&self) -> &str {
+            "test_item"
+        }
         fn compute(&mut self, _ctx: &ComputeContext) -> ComputeResult<f64> {
             Ok(42.0)
         }
@@ -335,7 +408,9 @@ mod tests {
     #[allow(dead_code)]
     struct TestFailingItem;
     impl RealtimeComputeItem for TestFailingItem {
-        fn name(&self) -> &str { "failing" }
+        fn name(&self) -> &str {
+            "failing"
+        }
         fn compute(&mut self, _ctx: &ComputeContext) -> ComputeResult<f64> {
             Err(ComputeError::ComputationFailed("test error".into()))
         }
@@ -343,11 +418,19 @@ mod tests {
 
     struct TestBatchItem;
     impl BatchComputeItem for TestBatchItem {
-        fn name(&self) -> &str { "test_batch" }
-        fn compute_batch(&self, current: &[TelemetryFrame], reference: &[TelemetryFrame]) -> ComputeResult<Vec<f64>> {
-            Ok(current.iter().zip(reference.iter()).map(|(c, r)| {
-                c.controls.speed_kmh as f64 - r.controls.speed_kmh as f64
-            }).collect())
+        fn name(&self) -> &str {
+            "test_batch"
+        }
+        fn compute_batch(
+            &self,
+            current: &[TelemetryFrame],
+            reference: &[TelemetryFrame],
+        ) -> ComputeResult<Vec<f64>> {
+            Ok(current
+                .iter()
+                .zip(reference.iter())
+                .map(|(c, r)| c.controls.speed_kmh as f64 - r.controls.speed_kmh as f64)
+                .collect())
         }
     }
 
@@ -403,6 +486,19 @@ mod tests {
     }
 
     #[test]
+    fn test_with_builtin_dashboard_items_registers_catalog_items() {
+        let registry = ComputeRegistry::with_builtin_dashboard_items().unwrap();
+
+        for entry in crate::compute::items::all_builtin_calculated_items() {
+            assert!(
+                registry.is_registered(&entry.key.name),
+                "builtin item '{}' should be registered",
+                entry.key
+            );
+        }
+    }
+
+    #[test]
     fn test_item_not_found() {
         let mut registry = ComputeRegistry::new();
         let frame = make_frame(100.0);
@@ -418,11 +514,15 @@ mod tests {
     #[test]
     fn test_compute_batch_success() {
         let mut registry = ComputeRegistry::new();
-        registry.register_calc_batch(Box::new(TestBatchItem)).unwrap();
+        registry
+            .register_calc_batch(Box::new(TestBatchItem))
+            .unwrap();
 
         let current = vec![make_frame(150.0), make_frame(160.0)];
         let reference = vec![make_frame(100.0), make_frame(100.0)];
-        let result = registry.compute_batch("test_batch", &current, &reference).unwrap();
+        let result = registry
+            .compute_batch("test_batch", &current, &reference)
+            .unwrap();
 
         assert_eq!(result, vec![50.0, 60.0]);
     }
@@ -441,11 +541,28 @@ mod tests {
         assert_eq!(cached.len(), 1);
     }
 
+    #[test]
+    fn test_session_best_reference_is_runtime_only() {
+        let mut registry = ComputeRegistry::new();
+        let source = ReferenceSource::session_best();
+
+        assert_eq!(
+            registry.resolve_reference_lap(&source).unwrap_err(),
+            ComputeError::NoValidData
+        );
+
+        registry.replace_reference(source.clone(), vec![make_frame(100.0), make_frame(110.0)]);
+        let cached = registry.resolve_reference_lap(&source).unwrap();
+        assert_eq!(cached.len(), 2);
+    }
+
     // ---- Registration validation ----
 
     struct EmptyNameItem;
     impl RealtimeComputeItem for EmptyNameItem {
-        fn name(&self) -> &str { "" }
+        fn name(&self) -> &str {
+            ""
+        }
         fn compute(&mut self, _ctx: &ComputeContext) -> ComputeResult<f64> {
             Ok(0.0)
         }
@@ -485,8 +602,14 @@ mod tests {
         // Try to register a batch item with the same name
         struct ConflictingBatch;
         impl BatchComputeItem for ConflictingBatch {
-            fn name(&self) -> &str { "test_item" }
-            fn compute_batch(&self, _c: &[TelemetryFrame], _r: &[TelemetryFrame]) -> ComputeResult<Vec<f64>> {
+            fn name(&self) -> &str {
+                "test_item"
+            }
+            fn compute_batch(
+                &self,
+                _c: &[TelemetryFrame],
+                _r: &[TelemetryFrame],
+            ) -> ComputeResult<Vec<f64>> {
                 Ok(vec![])
             }
         }

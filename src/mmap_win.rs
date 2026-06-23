@@ -47,14 +47,14 @@ use std::path::Path;
 /// are reference-counted by the memory manager), so reads from
 /// `as_slice()` will not segfault.
 pub struct MmapFile {
-        /// The file handle. Wrapped in `Option` so `close()` can take ownership
-        /// and drop it in the correct order (after the mmap).
-        ///
-        /// Order in struct declaration matters: `mmap` is declared first so
-        /// `Drop` releases it before `file`. This is critical on Windows.
-        mmap: Option<Mmap>,
-        file: Option<File>,
-    }
+    /// The file handle. Wrapped in `Option` so `close()` can take ownership
+    /// and drop it in the correct order (after the mmap).
+    ///
+    /// Order in struct declaration matters: `mmap` is declared first so
+    /// `Drop` releases it before `file`. This is critical on Windows.
+    mmap: Option<Mmap>,
+    file: Option<File>,
+}
 
 impl MmapFile {
     // -----------------------------------------------------------------------
@@ -89,13 +89,10 @@ impl MmapFile {
         // is deleted externally — page-table entries are reference-counted
         // by the memory manager.
         let mmap = unsafe {
-            MmapOptions::new()
-                .len(file_len)
-                .map(&file)
-                .map_err(|e| {
-                    // map_err because ? would still be inside unsafe{}
-                    std::io::Error::new(e.kind(), e.to_string())
-                })?
+            MmapOptions::new().len(file_len).map(&file).map_err(|e| {
+                // map_err because ? would still be inside unsafe{}
+                std::io::Error::new(e.kind(), e.to_string())
+            })?
         };
 
         Ok(Self {

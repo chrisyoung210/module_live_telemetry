@@ -71,7 +71,10 @@ mod tests {
     #[test]
     fn test_compute_error_display() {
         assert_eq!(ComputeError::NoValidData.to_string(), "无有效数据");
-        assert_eq!(ComputeError::InvalidReferenceData.to_string(), "无效参考数据");
+        assert_eq!(
+            ComputeError::InvalidReferenceData.to_string(),
+            "无效参考数据"
+        );
         assert_eq!(
             ComputeError::ComputationFailed("oops".into()).to_string(),
             "计算失败: oops"

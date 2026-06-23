@@ -28,7 +28,10 @@
 //! on decode.
 
 use crate::error::{TelemetryError, TelemetryResult};
-use crate::format_v2::{TYPE_BYTES, TYPE_BYTES_F32, TYPE_BYTES_I32, TYPE_BYTES_U16, TYPE_F32, TYPE_F64, TYPE_I32, TYPE_U64};
+use crate::format_v2::{
+    TYPE_BYTES, TYPE_BYTES_F32, TYPE_BYTES_I32, TYPE_BYTES_U16, TYPE_F32, TYPE_F64, TYPE_I32,
+    TYPE_U64,
+};
 
 // ---------------------------------------------------------------------------
 // Codec constants
@@ -169,10 +172,7 @@ fn encode_plain_payload(values: &[f64], value_type: u8, sub_value_count: u8) -> 
 
 /// Generic PLAIN encoder for fixed-size types.
 /// Each element is encoded as `N` LE bytes.
-fn encode_values_as<const N: usize>(
-    values: &[f64],
-    encode: impl Fn(f64) -> [u8; N],
-) -> Vec<u8> {
+fn encode_values_as<const N: usize>(values: &[f64], encode: impl Fn(f64) -> [u8; N]) -> Vec<u8> {
     let mut out = Vec::with_capacity(values.len() * N);
     for &v in values {
         out.extend_from_slice(&encode(v));
@@ -398,9 +398,15 @@ fn decode_plain_payload(
         TYPE_F32 => decode_fixed::<4>(payload, value_count, |b| f32::from_le_bytes(b) as f64),
         TYPE_F64 => decode_fixed::<8>(payload, value_count, f64::from_le_bytes),
         TYPE_BYTES => decode_bytes_plain(payload, value_count),
-        TYPE_BYTES_F32 => decode_bytes_plain_typed::<4>(payload, value_count, |b| f32::from_le_bytes(b) as f64),
-        TYPE_BYTES_U16 => decode_bytes_plain_typed::<2>(payload, value_count, |b| u16::from_le_bytes(b) as f64),
-        TYPE_BYTES_I32 => decode_bytes_plain_typed::<4>(payload, value_count, |b| i32::from_le_bytes(b) as f64),
+        TYPE_BYTES_F32 => {
+            decode_bytes_plain_typed::<4>(payload, value_count, |b| f32::from_le_bytes(b) as f64)
+        }
+        TYPE_BYTES_U16 => {
+            decode_bytes_plain_typed::<2>(payload, value_count, |b| u16::from_le_bytes(b) as f64)
+        }
+        TYPE_BYTES_I32 => {
+            decode_bytes_plain_typed::<4>(payload, value_count, |b| i32::from_le_bytes(b) as f64)
+        }
         _ => Err(TelemetryError::InvalidFormat(format!(
             "unknown value_type: 0x{value_type:02X}"
         ))),
@@ -679,7 +685,10 @@ mod tests {
         // f32 roundtrip loses precision; compare with tolerance
         for (a, b) in values.iter().zip(decoded.iter()) {
             let diff = (a - b).abs();
-            assert!(diff < 0.001, "f32 roundtrip mismatch: {a} vs {b}, diff {diff}");
+            assert!(
+                diff < 0.001,
+                "f32 roundtrip mismatch: {a} vs {b}, diff {diff}"
+            );
         }
     }
 
@@ -704,9 +713,7 @@ mod tests {
     fn roundtrip_bytes_plain_sub4() {
         // wheelLoad[4]: 3 frames
         let values: Vec<f64> = vec![
-            1.0, 2.0, 3.0, 4.0,
-            5.0, 6.0, 7.0, 8.0,
-            9.0, 10.0, 11.0, 12.0,
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ];
         let (encoded, crc, _min, _max) = encode_column(&values, TYPE_BYTES, CODEC_PLAIN, 4);
         let decoded = decode_column(&encoded, crc).unwrap();
@@ -808,11 +815,7 @@ mod tests {
     #[test]
     fn delta_bytes_roundtrip() {
         // velocity[3] DELTA: 3 frames
-        let values: Vec<f64> = vec![
-            10.0, 20.0, 30.0,
-            12.0, 22.0, 31.5,
-            14.0, 24.0, 33.0,
-        ];
+        let values: Vec<f64> = vec![10.0, 20.0, 30.0, 12.0, 22.0, 31.5, 14.0, 24.0, 33.0];
         let (encoded, crc, _min, _max) = encode_column(&values, TYPE_BYTES, CODEC_DELTA, 3);
         let decoded = decode_column(&encoded, crc).unwrap();
         // f32 deltas lose some precision

@@ -414,7 +414,10 @@ mod tests {
         // Session status
         assert_eq!(column_group(ColumnId::Status), GroupId::Environment);
         assert_eq!(column_group(ColumnId::Session), GroupId::Environment);
-        assert_eq!(column_group(ColumnId::SessionTimeLeft), GroupId::Environment);
+        assert_eq!(
+            column_group(ColumnId::SessionTimeLeft),
+            GroupId::Environment
+        );
         // Environment specific
         assert_eq!(column_group(ColumnId::AirTemp), GroupId::Environment);
         assert_eq!(column_group(ColumnId::RainIntensity), GroupId::Environment);
@@ -1146,13 +1149,11 @@ mod tests_v2 {
                 },
                 SchemaGroupDefV2 {
                     group_id: 2,
-                    columns: vec![
-                        SchemaColumnDefV2 {
-                            column_id: 20,
-                            value_type: TYPE_F64,
-                            name: "velocity".to_string(),
-                        },
-                    ],
+                    columns: vec![SchemaColumnDefV2 {
+                        column_id: 20,
+                        value_type: TYPE_F64,
+                        name: "velocity".to_string(),
+                    }],
                 },
             ],
         };

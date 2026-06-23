@@ -76,10 +76,50 @@ pub fn build_output_path(
     Ok(output_dir.join(name))
 }
 
+/// Build an output path that does not currently exist.
+///
+/// The base name follows [`default_recording_name`]. If that file already
+/// exists, appends `-N` before the extension until a free path is found.
+pub fn build_unique_output_path(
+    output_dir: &Path,
+    track_name: &str,
+    car_model: &str,
+) -> TelemetryResult<PathBuf> {
+    let base = build_output_path(output_dir, track_name, car_model)?;
+    if !base.exists() {
+        return Ok(base);
+    }
+
+    let stem = base
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("recording");
+    let extension = base
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("acctlm2");
+
+    for index in 1..10_000 {
+        let candidate = output_dir.join(format!("{stem}-{index}.{extension}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(TelemetryError::InvalidArgument(format!(
+        "could not find free output file name in {}",
+        output_dir.display()
+    )))
+}
+
 /// Check if a file already exists at the auto-named path.
 ///
 /// Returns `Err(InvalidArgument)` if the file exists.
-pub fn check_no_collision(output_dir: &Path, track_name: &str, car_model: &str) -> TelemetryResult<()> {
+pub fn check_no_collision(
+    output_dir: &Path,
+    track_name: &str,
+    car_model: &str,
+) -> TelemetryResult<()> {
     let path = build_output_path(output_dir, track_name, car_model)?;
     if path.exists() {
         return Err(TelemetryError::InvalidArgument(format!(

@@ -84,7 +84,11 @@ fn test_test_infrastructure() {
     // -- Every frame has distinctive values --
     for (i, f) in frames.iter().enumerate() {
         assert_eq!(f.sample_tick, i as u64, "frame[{i}].sample_tick");
-        assert_eq!(f.controls.speed_kmh, 150.0 + i as f32 * 0.1, "frame[{i}].speed_kmh");
+        assert_eq!(
+            f.controls.speed_kmh,
+            150.0 + i as f32 * 0.1,
+            "frame[{i}].speed_kmh"
+        );
     }
 
     // -- format_v2 types and constants are importable --
@@ -144,8 +148,14 @@ fn test_single_frame_session() {
     assert_eq!(original.controls.speed_kmh, roundtripped.controls.speed_kmh);
     assert_eq!(original.motion.velocity, roundtripped.motion.velocity);
     assert_eq!(original.tyres.tyre_temp, roundtripped.tyres.tyre_temp);
-    assert_eq!(original.timing.i_current_time, roundtripped.timing.i_current_time);
-    assert_eq!(original.car_state.car_damage, roundtripped.car_state.car_damage);
+    assert_eq!(
+        original.timing.i_current_time,
+        roundtripped.timing.i_current_time
+    );
+    assert_eq!(
+        original.car_state.car_damage,
+        roundtripped.car_state.car_damage
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +186,10 @@ fn test_partial_row_group() {
     // Verify all frame data
     for (i, (original, roundtripped)) in frames.iter().zip(result.iter()).enumerate() {
         assert_eq!(original.sample_tick, roundtripped.sample_tick, "i={i}");
-        assert_eq!(original.controls.speed_kmh, roundtripped.controls.speed_kmh, "i={i}");
+        assert_eq!(
+            original.controls.speed_kmh, roundtripped.controls.speed_kmh,
+            "i={i}"
+        );
     }
 }
 
@@ -193,7 +206,7 @@ fn test_partial_row_group() {
 fn test_mid_group_lap_boundary() {
     let frames_per_lap = 5;
     let chunk_rows = 10; // each row group holds exactly 2 laps
-    let lap_count = 4;   // frames 0..=19, laps 1..=4
+    let lap_count = 4; // frames 0..=19, laps 1..=4
 
     let (meta, frames) = test_data::make_test_session(lap_count, frames_per_lap);
     let mut meta = meta;
@@ -217,8 +230,14 @@ fn test_mid_group_lap_boundary() {
             "lap {lap_num} length mismatch"
         );
         for (orig, rt) in original_lap.iter().zip(roundtripped_lap.iter()) {
-            assert_eq!(orig.sample_tick, rt.sample_tick, "lap {lap_num} sample_tick");
-            assert_eq!(orig.controls.speed_kmh, rt.controls.speed_kmh, "lap {lap_num} speed");
+            assert_eq!(
+                orig.sample_tick, rt.sample_tick,
+                "lap {lap_num} sample_tick"
+            );
+            assert_eq!(
+                orig.controls.speed_kmh, rt.controls.speed_kmh,
+                "lap {lap_num} speed"
+            );
         }
     }
 }
@@ -237,34 +256,58 @@ fn test_bytes_columns_preserved() {
 
     // Motion.velocity is a [f32; 3] — stored as TYPE_BYTES blob
     let expected_velocity = original.motion.velocity;
-    assert_eq!(expected_velocity.len(), 3, "velocity must have 3 sub-values");
+    assert_eq!(
+        expected_velocity.len(),
+        3,
+        "velocity must have 3 sub-values"
+    );
 
     // TyreSample.wheel_slip is a [f32; 4] — stored as TYPE_BYTES blob
     let expected_wheel_slip = original.tyres.wheel_slip;
-    assert_eq!(expected_wheel_slip.len(), 4, "wheel_slip must have 4 sub-values");
+    assert_eq!(
+        expected_wheel_slip.len(),
+        4,
+        "wheel_slip must have 4 sub-values"
+    );
 
     // TyreSample.tyre_temp is a [f32; 4] — stored as TYPE_BYTES blob
     let expected_tyre_temp = original.tyres.tyre_temp;
-    assert_eq!(expected_tyre_temp.len(), 4, "tyre_temp must have 4 sub-values");
+    assert_eq!(
+        expected_tyre_temp.len(),
+        4,
+        "tyre_temp must have 4 sub-values"
+    );
 
     let result = run_roundtrip(&_meta, &frames);
     assert_eq!(result.len(), 1, "expected one frame");
     let rt = &result[0];
 
     // Verify each sub-value is preserved exactly
-    for (i, (&orig, &rt_val)) in expected_velocity.iter().zip(rt.motion.velocity.iter()).enumerate() {
+    for (i, (&orig, &rt_val)) in expected_velocity
+        .iter()
+        .zip(rt.motion.velocity.iter())
+        .enumerate()
+    {
         assert!(
             (orig - rt_val).abs() < f32::EPSILON,
             "velocity[{i}]: expected {orig}, got {rt_val}"
         );
     }
-    for (i, (&orig, &rt_val)) in expected_wheel_slip.iter().zip(rt.tyres.wheel_slip.iter()).enumerate() {
+    for (i, (&orig, &rt_val)) in expected_wheel_slip
+        .iter()
+        .zip(rt.tyres.wheel_slip.iter())
+        .enumerate()
+    {
         assert!(
             (orig - rt_val).abs() < f32::EPSILON,
             "wheel_slip[{i}]: expected {orig}, got {rt_val}"
         );
     }
-    for (i, (&orig, &rt_val)) in expected_tyre_temp.iter().zip(rt.tyres.tyre_temp.iter()).enumerate() {
+    for (i, (&orig, &rt_val)) in expected_tyre_temp
+        .iter()
+        .zip(rt.tyres.tyre_temp.iter())
+        .enumerate()
+    {
         assert!(
             (orig - rt_val).abs() < f32::EPSILON,
             "tyre_temp[{i}]: expected {orig}, got {rt_val}"
@@ -272,9 +315,18 @@ fn test_bytes_columns_preserved() {
     }
 
     // Verify all 12 BYTES sub-values roundtrip via the full frame comparison
-    assert_eq!(original.motion.velocity, rt.motion.velocity, "velocity array mismatch");
-    assert_eq!(original.tyres.wheel_slip, rt.tyres.wheel_slip, "wheel_slip array mismatch");
-    assert_eq!(original.tyres.tyre_temp, rt.tyres.tyre_temp, "tyre_temp array mismatch");
+    assert_eq!(
+        original.motion.velocity, rt.motion.velocity,
+        "velocity array mismatch"
+    );
+    assert_eq!(
+        original.tyres.wheel_slip, rt.tyres.wheel_slip,
+        "wheel_slip array mismatch"
+    );
+    assert_eq!(
+        original.tyres.tyre_temp, rt.tyres.tyre_temp,
+        "tyre_temp array mismatch"
+    );
 }
 
 // ---------------------------------------------------------------------------

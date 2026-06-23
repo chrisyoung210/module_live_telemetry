@@ -5,9 +5,8 @@
 //! pattern so swapped-field bugs are detectable.
 
 use module_live_telemetry::{
-    CarStateSample, ControlSample, EnvironmentSample, MotionSample,
-    OtherCarsSample, PowertrainSample, SessionMetadata, SessionSample,
-    TelemetryFrame, TimingSample, TyreSample,
+    CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
+    PowertrainSample, SessionMetadata, SessionSample, TelemetryFrame, TimingSample, TyreSample,
 };
 
 // ---------------------------------------------------------------------------
@@ -385,14 +384,16 @@ fn test_data_lap_boundaries() {
     }
     for (i, frame) in frames[fpl as usize..2 * fpl as usize].iter().enumerate() {
         assert_eq!(
-            frame.session.completed_laps, 1,
+            frame.session.completed_laps,
+            1,
             "frame {} (lap 2) expected completed_laps=1",
             i + fpl as usize
         );
     }
     for (i, frame) in frames[2 * fpl as usize..].iter().enumerate() {
         assert_eq!(
-            frame.session.completed_laps, 2,
+            frame.session.completed_laps,
+            2,
             "frame {} (lap 3) expected completed_laps=2",
             i + 2 * fpl as usize
         );
@@ -423,20 +424,14 @@ fn test_data_all_substructures_populated() {
             "speed_kmh should be > 140"
         );
         // Motion — velocity[0] non-zero
-        assert!(
-            frame.motion.velocity[0] >= 0.0,
-            "velocity populated"
-        );
+        assert!(frame.motion.velocity[0] >= 0.0, "velocity populated");
         // Tyres
         assert!(
             frame.tyres.wheel_load[0] > 1000.0,
             "wheel_load should be > 1000"
         );
         // Powertrain
-        assert!(
-            frame.powertrain.turbo_boost > 1.0,
-            "turbo_boost populated"
-        );
+        assert!(frame.powertrain.turbo_boost > 1.0, "turbo_boost populated");
         // Session
         assert_eq!(frame.session.status, 2, "session.status should be 2");
         // Timing
@@ -445,20 +440,11 @@ fn test_data_all_substructures_populated() {
             "timing.i_current_time populated"
         );
         // CarState
-        assert!(
-            frame.car_state.cg_height > 0.3,
-            "cg_height should be > 0.3"
-        );
+        assert!(frame.car_state.cg_height > 0.3, "cg_height should be > 0.3");
         // Environment
-        assert!(
-            frame.environment.air_temp > 20.0,
-            "air_temp populated"
-        );
+        assert!(frame.environment.air_temp > 20.0, "air_temp populated");
         // OtherCars
-        assert!(
-            frame.other_cars.active_cars > 0,
-            "active_cars populated"
-        );
+        assert!(frame.other_cars.active_cars > 0, "active_cars populated");
     }
 }
 
@@ -497,7 +483,11 @@ fn test_data_different_inputs_different_outputs() {
     let (_meta1, frames1) = make_test_session(1, 3);
     let (_meta2, frames2) = make_test_session(2, 3);
     // Different lap counts → different frame sequences
-    assert_ne!(frames1.len(), frames2.len(), "different lap counts => different sizes");
+    assert_ne!(
+        frames1.len(),
+        frames2.len(),
+        "different lap counts => different sizes"
+    );
 
     // Different metadata
     let m_a = make_test_metadata("spa", "porsche");

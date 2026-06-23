@@ -1,8 +1,7 @@
-use module_live_telemetry::{
-    BinaryTelemetryReader, LiveTelemetryConfig, SessionMetadata,
-    TelemetryFrame,
-};
 use module_live_telemetry::writer::BinaryTelemetryWriter;
+use module_live_telemetry::{
+    BinaryTelemetryReader, LiveTelemetryConfig, SessionMetadata, TelemetryFrame,
+};
 
 /// Create a TelemetryFrame with distinctive non-zero values for all 9 clusters.
 /// `seed` shifts field values so each frame is unique.
@@ -216,7 +215,9 @@ fn make_frame(seed: u64) -> TelemetryFrame {
             player_car_id: 100 + seed as i32,
             car_coordinates: {
                 let mut v = vec![0.0f32; 180];
-                v[0] = s; v[1] = s + 1.0; v[2] = s + 2.0;
+                v[0] = s;
+                v[1] = s + 1.0;
+                v[2] = s + 2.0;
                 v
             },
             car_id: {
@@ -270,11 +271,17 @@ fn verify_cluster(reader: &BinaryTelemetryReader, expected_count: usize, cluster
             assert_eq!(data.len(), expected_count, "controls count mismatch");
             for (i, d) in data.iter().enumerate() {
                 let f = make_frame(i as u64);
-                assert_eq!(d.sample_tick, f.controls.sample_tick, "controls[{i}].sample_tick");
+                assert_eq!(
+                    d.sample_tick, f.controls.sample_tick,
+                    "controls[{i}].sample_tick"
+                );
                 assert_eq!(d.speed_kmh, f.controls.speed_kmh, "controls[{i}].speed_kmh");
                 assert_eq!(d.gas, f.controls.gas, "controls[{i}].gas");
                 assert_eq!(d.brake, f.controls.brake, "controls[{i}].brake");
-                assert_eq!(d.steer_angle, f.controls.steer_angle, "controls[{i}].steer_angle");
+                assert_eq!(
+                    d.steer_angle, f.controls.steer_angle,
+                    "controls[{i}].steer_angle"
+                );
                 assert_eq!(d.gear, f.controls.gear, "controls[{i}].gear");
                 assert_eq!(d.rpms, f.controls.rpms, "controls[{i}].rpms");
                 assert_eq!(d.fuel, f.controls.fuel, "controls[{i}].fuel");
@@ -287,8 +294,14 @@ fn verify_cluster(reader: &BinaryTelemetryReader, expected_count: usize, cluster
                 let f = make_frame(i as u64);
                 assert_eq!(d.velocity, f.motion.velocity, "motion[{i}].velocity");
                 assert_eq!(d.acc_g, f.motion.acc_g, "motion[{i}].acc_g");
-                assert_eq!(d.local_velocity, f.motion.local_velocity, "motion[{i}].local_velocity");
-                assert_eq!(d.local_angular_vel, f.motion.local_angular_vel, "motion[{i}].local_angular_vel");
+                assert_eq!(
+                    d.local_velocity, f.motion.local_velocity,
+                    "motion[{i}].local_velocity"
+                );
+                assert_eq!(
+                    d.local_angular_vel, f.motion.local_angular_vel,
+                    "motion[{i}].local_angular_vel"
+                );
                 assert_eq!(d.heading, f.motion.heading, "motion[{i}].heading");
                 assert_eq!(d.pitch, f.motion.pitch, "motion[{i}].pitch");
                 assert_eq!(d.roll, f.motion.roll, "motion[{i}].roll");
@@ -301,12 +314,30 @@ fn verify_cluster(reader: &BinaryTelemetryReader, expected_count: usize, cluster
                 let f = make_frame(i as u64);
                 assert_eq!(d.wheel_slip, f.tyres.wheel_slip, "tyres[{i}].wheel_slip");
                 assert_eq!(d.wheel_load, f.tyres.wheel_load, "tyres[{i}].wheel_load");
-                assert_eq!(d.tyre_contact_point, f.tyres.tyre_contact_point, "tyres[{i}].tyre_contact_point");
-                assert_eq!(d.tyre_contact_normal, f.tyres.tyre_contact_normal, "tyres[{i}].tyre_contact_normal");
-                assert_eq!(d.tyre_contact_heading, f.tyres.tyre_contact_heading, "tyres[{i}].tyre_contact_heading");
-                assert_eq!(d.number_of_tyres_out, f.tyres.number_of_tyres_out, "tyres[{i}].number_of_tyres_out");
-                assert_eq!(d.front_brake_compound, f.tyres.front_brake_compound, "tyres[{i}].front_brake_compound");
-                assert_eq!(d.rear_brake_compound, f.tyres.rear_brake_compound, "tyres[{i}].rear_brake_compound");
+                assert_eq!(
+                    d.tyre_contact_point, f.tyres.tyre_contact_point,
+                    "tyres[{i}].tyre_contact_point"
+                );
+                assert_eq!(
+                    d.tyre_contact_normal, f.tyres.tyre_contact_normal,
+                    "tyres[{i}].tyre_contact_normal"
+                );
+                assert_eq!(
+                    d.tyre_contact_heading, f.tyres.tyre_contact_heading,
+                    "tyres[{i}].tyre_contact_heading"
+                );
+                assert_eq!(
+                    d.number_of_tyres_out, f.tyres.number_of_tyres_out,
+                    "tyres[{i}].number_of_tyres_out"
+                );
+                assert_eq!(
+                    d.front_brake_compound, f.tyres.front_brake_compound,
+                    "tyres[{i}].front_brake_compound"
+                );
+                assert_eq!(
+                    d.rear_brake_compound, f.tyres.rear_brake_compound,
+                    "tyres[{i}].rear_brake_compound"
+                );
             }
         }
         "powertrain" => {
@@ -314,9 +345,18 @@ fn verify_cluster(reader: &BinaryTelemetryReader, expected_count: usize, cluster
             assert_eq!(data.len(), expected_count, "powertrain count mismatch");
             for (i, d) in data.iter().enumerate() {
                 let f = make_frame(i as u64);
-                assert_eq!(d.turbo_boost, f.powertrain.turbo_boost, "powertrain[{i}].turbo_boost");
-                assert_eq!(d.water_temp, f.powertrain.water_temp, "powertrain[{i}].water_temp");
-                assert_eq!(d.current_max_rpm, f.powertrain.current_max_rpm, "powertrain[{i}].current_max_rpm");
+                assert_eq!(
+                    d.turbo_boost, f.powertrain.turbo_boost,
+                    "powertrain[{i}].turbo_boost"
+                );
+                assert_eq!(
+                    d.water_temp, f.powertrain.water_temp,
+                    "powertrain[{i}].water_temp"
+                );
+                assert_eq!(
+                    d.current_max_rpm, f.powertrain.current_max_rpm,
+                    "powertrain[{i}].current_max_rpm"
+                );
             }
         }
         "session" => {
@@ -325,7 +365,10 @@ fn verify_cluster(reader: &BinaryTelemetryReader, expected_count: usize, cluster
             for (i, d) in data.iter().enumerate() {
                 let f = make_frame(i as u64);
                 assert_eq!(d.status, f.session.status, "session[{i}].status");
-                assert_eq!(d.completed_laps, f.session.completed_laps, "session[{i}].completed_laps");
+                assert_eq!(
+                    d.completed_laps, f.session.completed_laps,
+                    "session[{i}].completed_laps"
+                );
                 assert_eq!(d.position, f.session.position, "session[{i}].position");
             }
         }
@@ -334,9 +377,18 @@ fn verify_cluster(reader: &BinaryTelemetryReader, expected_count: usize, cluster
             assert_eq!(data.len(), expected_count, "timing count mismatch");
             for (i, d) in data.iter().enumerate() {
                 let f = make_frame(i as u64);
-                assert_eq!(d.i_current_time, f.timing.i_current_time, "timing[{i}].i_current_time");
-                assert_eq!(d.i_last_time, f.timing.i_last_time, "timing[{i}].i_last_time");
-                assert_eq!(d.i_best_time, f.timing.i_best_time, "timing[{i}].i_best_time");
+                assert_eq!(
+                    d.i_current_time, f.timing.i_current_time,
+                    "timing[{i}].i_current_time"
+                );
+                assert_eq!(
+                    d.i_last_time, f.timing.i_last_time,
+                    "timing[{i}].i_last_time"
+                );
+                assert_eq!(
+                    d.i_best_time, f.timing.i_best_time,
+                    "timing[{i}].i_best_time"
+                );
             }
         }
         "car_state" => {
@@ -344,10 +396,22 @@ fn verify_cluster(reader: &BinaryTelemetryReader, expected_count: usize, cluster
             assert_eq!(data.len(), expected_count, "car_state count mismatch");
             for (i, d) in data.iter().enumerate() {
                 let f = make_frame(i as u64);
-                assert_eq!(d.ride_height, f.car_state.ride_height, "car_state[{i}].ride_height");
-                assert_eq!(d.ignition_on, f.car_state.ignition_on, "car_state[{i}].ignition_on");
-                assert_eq!(d.brake_bias, f.car_state.brake_bias, "car_state[{i}].brake_bias");
-                assert_eq!(d.mfd_tyre_pressure, f.car_state.mfd_tyre_pressure, "car_state[{i}].mfd_tyre_pressure");
+                assert_eq!(
+                    d.ride_height, f.car_state.ride_height,
+                    "car_state[{i}].ride_height"
+                );
+                assert_eq!(
+                    d.ignition_on, f.car_state.ignition_on,
+                    "car_state[{i}].ignition_on"
+                );
+                assert_eq!(
+                    d.brake_bias, f.car_state.brake_bias,
+                    "car_state[{i}].brake_bias"
+                );
+                assert_eq!(
+                    d.mfd_tyre_pressure, f.car_state.mfd_tyre_pressure,
+                    "car_state[{i}].mfd_tyre_pressure"
+                );
             }
         }
         "environment" => {
@@ -355,9 +419,18 @@ fn verify_cluster(reader: &BinaryTelemetryReader, expected_count: usize, cluster
             assert_eq!(data.len(), expected_count, "environment count mismatch");
             for (i, d) in data.iter().enumerate() {
                 let f = make_frame(i as u64);
-                assert_eq!(d.air_density, f.environment.air_density, "environment[{i}].air_density");
-                assert_eq!(d.air_temp, f.environment.air_temp, "environment[{i}].air_temp");
-                assert_eq!(d.road_temp, f.environment.road_temp, "environment[{i}].road_temp");
+                assert_eq!(
+                    d.air_density, f.environment.air_density,
+                    "environment[{i}].air_density"
+                );
+                assert_eq!(
+                    d.air_temp, f.environment.air_temp,
+                    "environment[{i}].air_temp"
+                );
+                assert_eq!(
+                    d.road_temp, f.environment.road_temp,
+                    "environment[{i}].road_temp"
+                );
             }
         }
         "other_cars" => {
@@ -365,12 +438,29 @@ fn verify_cluster(reader: &BinaryTelemetryReader, expected_count: usize, cluster
             assert_eq!(data.len(), expected_count, "other_cars count mismatch");
             for (i, d) in data.iter().enumerate() {
                 let f = make_frame(i as u64);
-                assert_eq!(d.player_car_id, f.other_cars.player_car_id, "other_cars[{i}].player_car_id");
-                assert_eq!(d.active_cars, f.other_cars.active_cars, "other_cars[{i}].active_cars");
-                assert_eq!(d.car_coordinates.len(), 180, "other_cars[{i}].car_coordinates len");
+                assert_eq!(
+                    d.player_car_id, f.other_cars.player_car_id,
+                    "other_cars[{i}].player_car_id"
+                );
+                assert_eq!(
+                    d.active_cars, f.other_cars.active_cars,
+                    "other_cars[{i}].active_cars"
+                );
+                assert_eq!(
+                    d.car_coordinates.len(),
+                    180,
+                    "other_cars[{i}].car_coordinates len"
+                );
                 assert_eq!(d.car_id.len(), 60, "other_cars[{i}].car_id len");
-                assert_eq!(&d.car_coordinates[0..3], &f.other_cars.car_coordinates[0..3], "other_cars[{i}].car_coordinates[0..3]");
-                assert_eq!(d.car_id[0], f.other_cars.car_id[0], "other_cars[{i}].car_id[0]");
+                assert_eq!(
+                    &d.car_coordinates[0..3],
+                    &f.other_cars.car_coordinates[0..3],
+                    "other_cars[{i}].car_coordinates[0..3]"
+                );
+                assert_eq!(
+                    d.car_id[0], f.other_cars.car_id[0],
+                    "other_cars[{i}].car_id[0]"
+                );
             }
         }
         _ => panic!("unknown cluster: {cluster}"),

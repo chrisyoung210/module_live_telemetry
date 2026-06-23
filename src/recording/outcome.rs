@@ -12,8 +12,8 @@ use crate::format::LAP_INDEX_MAGIC;
 use crate::item_key::{ItemKey, ItemType};
 use crate::reader::BinaryTelemetryReader;
 use crate::types::{
-    CarStateSample, ControlSample, EnvironmentSample, LapIndexEntry, MotionSample,
-    OtherCarsSample, PowertrainSample, SessionSample, TimingSample, TyreSample,
+    CarStateSample, ControlSample, EnvironmentSample, LapIndexEntry, MotionSample, OtherCarsSample,
+    PowertrainSample, SessionSample, TimingSample, TyreSample,
 };
 
 /// Summary of a single lap within a recording.
@@ -184,25 +184,22 @@ pub fn aggregate_laps(reader: &BinaryTelemetryReader) -> TelemetryResult<Vec<Agg
                         .iter()
                         .filter(|t| {
                             t.sample_tick >= start_tick
-                                && t.sample_tick
-                                    <= session_samples[cross_idx].sample_tick
+                                && t.sample_tick <= session_samples[cross_idx].sample_tick
                         })
                         .max_by_key(|t| t.sample_tick)
                 });
             timing_at_cross
                 .map(|t| {
-                    let last =
-                        if t.i_last_time > 0 && t.i_last_time < 2_000_000 {
-                            Some(t.i_last_time)
-                        } else {
-                            None
-                        };
-                    let best =
-                        if t.i_best_time > 0 && t.i_best_time < 2_000_000 {
-                            Some(t.i_best_time)
-                        } else {
-                            None
-                        };
+                    let last = if t.i_last_time > 0 && t.i_last_time < 2_000_000 {
+                        Some(t.i_last_time)
+                    } else {
+                        None
+                    };
+                    let best = if t.i_best_time > 0 && t.i_best_time < 2_000_000 {
+                        Some(t.i_best_time)
+                    } else {
+                        None
+                    };
                     (last, best)
                 })
                 .unwrap_or((None, None))
@@ -321,8 +318,7 @@ pub fn parse_acctlm_file(path: impl AsRef<Path>) -> TelemetryResult<RecordingOut
             let lap_time = if lap.is_out_lap {
                 None
             } else {
-                lap.last_time_ms
-                    .map(|ms| Duration::from_millis(ms as u64))
+                lap.last_time_ms.map(|ms| Duration::from_millis(ms as u64))
             };
             LapSummary {
                 lap_number: lap.lap_number,
@@ -401,9 +397,7 @@ pub fn append_lap_index(path: &Path) -> TelemetryResult<usize> {
             start_tick: lap_data[start_idx].0,
             end_tick: lap_data[cross_idx - 1].0,
             sample_count: (cross_idx - start_idx) as u32,
-            is_valid: (lap_number != 0
-                && lap_data[cross_idx - 1].2 != 0)
-                as i32,
+            is_valid: (lap_number != 0 && lap_data[cross_idx - 1].2 != 0) as i32,
             is_out_lap: (lap_number == 0) as i32,
         });
         start_idx = cross_idx;
@@ -583,7 +577,7 @@ fn extract_lap_telemetry_impl(
                 "motion" => need_motion = true,
                 "other_cars" => need_other_cars = true,
                 "powertrain" => need_powertrain = true,
-                "session" => {}, // session is always read for lap boundaries
+                "session" => {} // session is always read for lap boundaries
                 "timing" => need_timing = true,
                 "tyres" => need_tyres = true,
                 _ => unreachable!(), // caught by validate_raw_field
@@ -593,13 +587,18 @@ fn extract_lap_telemetry_impl(
                 "sample_tick" | "timestamp_ns" => {}
                 _ => {
                     return Err(TelemetryError::InvalidArgument(format!(
-                        "unknown top-level field '{}'", field
+                        "unknown top-level field '{}'",
+                        field
                     )));
                 }
             }
         }
 
-        parsed.push(Parsed { original: key, substruct, field });
+        parsed.push(Parsed {
+            original: key,
+            substruct,
+            field,
+        });
     }
 
     // ── Phase 1: open file & read session data (needed for lap boundaries) ──
@@ -688,29 +687,71 @@ fn extract_lap_telemetry_impl(
             let end = lap.end_tick;
 
             // Read only this lap's data for each needed cluster
-            let controls_data = if need_controls { reader.read_controls_range(start, end).unwrap_or_default() } else { Vec::new() };
-            let controls_by_tick: HashMap<u64, &ControlSample> = controls_data.iter().map(|s| (s.sample_tick, s)).collect();
+            let controls_data = if need_controls {
+                reader.read_controls_range(start, end).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let controls_by_tick: HashMap<u64, &ControlSample> =
+                controls_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-            let motion_data = if need_motion { reader.read_motion_range(start, end).unwrap_or_default() } else { Vec::new() };
-            let motion_by_tick: HashMap<u64, &MotionSample> = motion_data.iter().map(|s| (s.sample_tick, s)).collect();
+            let motion_data = if need_motion {
+                reader.read_motion_range(start, end).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let motion_by_tick: HashMap<u64, &MotionSample> =
+                motion_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-            let tyres_data = if need_tyres { reader.read_tyres_range(start, end).unwrap_or_default() } else { Vec::new() };
-            let tyres_by_tick: HashMap<u64, &TyreSample> = tyres_data.iter().map(|s| (s.sample_tick, s)).collect();
+            let tyres_data = if need_tyres {
+                reader.read_tyres_range(start, end).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let tyres_by_tick: HashMap<u64, &TyreSample> =
+                tyres_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-            let powertrain_data = if need_powertrain { reader.read_powertrain_range(start, end).unwrap_or_default() } else { Vec::new() };
-            let powertrain_by_tick: HashMap<u64, &PowertrainSample> = powertrain_data.iter().map(|s| (s.sample_tick, s)).collect();
+            let powertrain_data = if need_powertrain {
+                reader.read_powertrain_range(start, end).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let powertrain_by_tick: HashMap<u64, &PowertrainSample> =
+                powertrain_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-            let timing_data = if need_timing { reader.read_timing_range(start, end).unwrap_or_default() } else { Vec::new() };
-            let timing_by_tick: HashMap<u64, &TimingSample> = timing_data.iter().map(|s| (s.sample_tick, s)).collect();
+            let timing_data = if need_timing {
+                reader.read_timing_range(start, end).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let timing_by_tick: HashMap<u64, &TimingSample> =
+                timing_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-            let car_state_data = if need_car_state { reader.read_car_state_range(start, end).unwrap_or_default() } else { Vec::new() };
-            let car_state_by_tick: HashMap<u64, &CarStateSample> = car_state_data.iter().map(|s| (s.sample_tick, s)).collect();
+            let car_state_data = if need_car_state {
+                reader.read_car_state_range(start, end).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let car_state_by_tick: HashMap<u64, &CarStateSample> =
+                car_state_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-            let env_data = if need_environment { reader.read_environment_range(start, end).unwrap_or_default() } else { Vec::new() };
-            let env_by_tick: HashMap<u64, &EnvironmentSample> = env_data.iter().map(|s| (s.sample_tick, s)).collect();
+            let env_data = if need_environment {
+                reader
+                    .read_environment_range(start, end)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let env_by_tick: HashMap<u64, &EnvironmentSample> =
+                env_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-            let other_cars_data = if need_other_cars { reader.read_other_cars_range(start, end).unwrap_or_default() } else { Vec::new() };
-            let other_cars_by_tick: HashMap<u64, &OtherCarsSample> = other_cars_data.iter().map(|s| (s.sample_tick, s)).collect();
+            let other_cars_data = if need_other_cars {
+                reader.read_other_cars_range(start, end).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let other_cars_by_tick: HashMap<u64, &OtherCarsSample> =
+                other_cars_data.iter().map(|s| (s.sample_tick, s)).collect();
 
             // Extract this lap's values
             let mut lap_map: HashMap<String, Vec<f64>> = HashMap::new();
@@ -778,29 +819,69 @@ fn extract_lap_telemetry_impl(
 
     // ── Bulk-read path (lap_filter = None): read all laps ──
 
-    let controls_data = if need_controls { reader.read_all_controls().unwrap_or_default() } else { Vec::new() };
-    let controls_by_tick: HashMap<u64, &ControlSample> = controls_data.iter().map(|s| (s.sample_tick, s)).collect();
+    let controls_data = if need_controls {
+        reader.read_all_controls().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let controls_by_tick: HashMap<u64, &ControlSample> =
+        controls_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-    let motion_data = if need_motion { reader.read_all_motion().unwrap_or_default() } else { Vec::new() };
-    let motion_by_tick: HashMap<u64, &MotionSample> = motion_data.iter().map(|s| (s.sample_tick, s)).collect();
+    let motion_data = if need_motion {
+        reader.read_all_motion().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let motion_by_tick: HashMap<u64, &MotionSample> =
+        motion_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-    let tyres_data = if need_tyres { reader.read_all_tyres().unwrap_or_default() } else { Vec::new() };
-    let tyres_by_tick: HashMap<u64, &TyreSample> = tyres_data.iter().map(|s| (s.sample_tick, s)).collect();
+    let tyres_data = if need_tyres {
+        reader.read_all_tyres().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let tyres_by_tick: HashMap<u64, &TyreSample> =
+        tyres_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-    let powertrain_data = if need_powertrain { reader.read_all_powertrain().unwrap_or_default() } else { Vec::new() };
-    let powertrain_by_tick: HashMap<u64, &PowertrainSample> = powertrain_data.iter().map(|s| (s.sample_tick, s)).collect();
+    let powertrain_data = if need_powertrain {
+        reader.read_all_powertrain().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let powertrain_by_tick: HashMap<u64, &PowertrainSample> =
+        powertrain_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-    let timing_data = if need_timing { reader.read_all_timing().unwrap_or_default() } else { Vec::new() };
-    let timing_by_tick: HashMap<u64, &TimingSample> = timing_data.iter().map(|s| (s.sample_tick, s)).collect();
+    let timing_data = if need_timing {
+        reader.read_all_timing().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let timing_by_tick: HashMap<u64, &TimingSample> =
+        timing_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-    let car_state_data = if need_car_state { reader.read_all_car_state().unwrap_or_default() } else { Vec::new() };
-    let car_state_by_tick: HashMap<u64, &CarStateSample> = car_state_data.iter().map(|s| (s.sample_tick, s)).collect();
+    let car_state_data = if need_car_state {
+        reader.read_all_car_state().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let car_state_by_tick: HashMap<u64, &CarStateSample> =
+        car_state_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-    let env_data = if need_environment { reader.read_all_environment().unwrap_or_default() } else { Vec::new() };
-    let env_by_tick: HashMap<u64, &EnvironmentSample> = env_data.iter().map(|s| (s.sample_tick, s)).collect();
+    let env_data = if need_environment {
+        reader.read_all_environment().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let env_by_tick: HashMap<u64, &EnvironmentSample> =
+        env_data.iter().map(|s| (s.sample_tick, s)).collect();
 
-    let other_cars_data = if need_other_cars { reader.read_all_other_cars().unwrap_or_default() } else { Vec::new() };
-    let other_cars_by_tick: HashMap<u64, &OtherCarsSample> = other_cars_data.iter().map(|s| (s.sample_tick, s)).collect();
+    let other_cars_data = if need_other_cars {
+        reader.read_all_other_cars().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let other_cars_by_tick: HashMap<u64, &OtherCarsSample> =
+        other_cars_data.iter().map(|s| (s.sample_tick, s)).collect();
 
     // ── Phase 5: extract per-lap values ──
 

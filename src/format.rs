@@ -38,8 +38,6 @@ pub const CLUSTER_CAR_STATE: u16 = 0x0700;
 pub const CLUSTER_ENVIRONMENT: u16 = 0x0800;
 pub const CLUSTER_OTHER_CARS: u16 = 0x0900;
 
-
-
 // ---------------------------------------------------------------------------
 // Column IDs
 // ---------------------------------------------------------------------------
@@ -248,7 +246,11 @@ pub struct ColumnSpec {
 
 impl ColumnSpec {
     pub const fn new(id: u16, name: &'static str, value_type: u8) -> Self {
-        Self { id, name, value_type }
+        Self {
+            id,
+            name,
+            value_type,
+        }
     }
 }
 
@@ -362,7 +364,11 @@ pub const SESSION_COLUMNS: [ColumnSpec; 32] = [
     ColumnSpec::new(COL_SESSION_TIME_LEFT, "sessionTimeLeft", TYPE_F32),
     ColumnSpec::new(COL_NUMBER_OF_LAPS, "numberOfLaps", TYPE_I32),
     ColumnSpec::new(COL_CURRENT_SECTOR_INDEX, "currentSectorIndex", TYPE_I32),
-    ColumnSpec::new(COL_NORMALIZED_CAR_POSITION, "normalizedCarPosition", TYPE_F32),
+    ColumnSpec::new(
+        COL_NORMALIZED_CAR_POSITION,
+        "normalizedCarPosition",
+        TYPE_F32,
+    ),
     ColumnSpec::new(COL_IS_IN_PIT, "isInPit", TYPE_I32),
     ColumnSpec::new(COL_IS_IN_PIT_LANE, "isInPitLane", TYPE_I32),
     ColumnSpec::new(COL_MANDATORY_PIT_DONE, "mandatoryPitDone", TYPE_I32),
@@ -406,8 +412,16 @@ pub const TIMING_COLUMNS: [ColumnSpec; 21] = [
     ColumnSpec::new(COL_BEST_TIME_STR, "bestTimeStr", TYPE_BYTES),
     ColumnSpec::new(COL_SPLIT_STR, "splitStr", TYPE_BYTES),
     ColumnSpec::new(COL_DELTA_LAP_TIME_STR, "deltaLapTimeStr", TYPE_BYTES),
-    ColumnSpec::new(COL_ESTIMATED_LAP_TIME_STR, "estimatedLapTimeStr", TYPE_BYTES),
-    ColumnSpec::new(COL_OBSERVED_SLOT_BEFORE_I_SPLIT, "observedSlotBeforeISplit", TYPE_I32),
+    ColumnSpec::new(
+        COL_ESTIMATED_LAP_TIME_STR,
+        "estimatedLapTimeStr",
+        TYPE_BYTES,
+    ),
+    ColumnSpec::new(
+        COL_OBSERVED_SLOT_BEFORE_I_SPLIT,
+        "observedSlotBeforeISplit",
+        TYPE_I32,
+    ),
 ];
 
 pub const CAR_STATE_COLUMNS: [ColumnSpec; 42] = [
@@ -426,7 +440,11 @@ pub const CAR_STATE_COLUMNS: [ColumnSpec; 42] = [
     ColumnSpec::new(COL_FLASHING_LIGHTS, "flashingLights", TYPE_I32),
     ColumnSpec::new(COL_LIGHTS_STAGE, "lightsStage", TYPE_I32),
     ColumnSpec::new(COL_WIPER_LV, "wiperLv", TYPE_I32),
-    ColumnSpec::new(COL_DRIVER_STINT_TOTAL_TIME_LEFT, "driverStintTotalTimeLeft", TYPE_I32),
+    ColumnSpec::new(
+        COL_DRIVER_STINT_TOTAL_TIME_LEFT,
+        "driverStintTotalTimeLeft",
+        TYPE_I32,
+    ),
     ColumnSpec::new(COL_DRIVER_STINT_TIME_LEFT, "driverStintTimeLeft", TYPE_I32),
     ColumnSpec::new(COL_RAIN_TYRES, "rainTyres", TYPE_I32),
     ColumnSpec::new(COL_CURRENT_TYRE_SET, "currentTyreSet", TYPE_I32),
@@ -439,7 +457,11 @@ pub const CAR_STATE_COLUMNS: [ColumnSpec; 42] = [
     ColumnSpec::new(COL_IDEAL_LINE_ON, "idealLineOn", TYPE_I32),
     ColumnSpec::new(COL_IS_SETUP_MENU_VISIBLE, "isSetupMenuVisible", TYPE_I32),
     ColumnSpec::new(COL_MAIN_DISPLAY_INDEX, "mainDisplayIndex", TYPE_I32),
-    ColumnSpec::new(COL_SECONDARY_DISPLAY_INDEX, "secondaryDisplayIndex", TYPE_I32),
+    ColumnSpec::new(
+        COL_SECONDARY_DISPLAY_INDEX,
+        "secondaryDisplayIndex",
+        TYPE_I32,
+    ),
     ColumnSpec::new(COL_DIRECTION_LIGHTS_LEFT, "directionLightsLeft", TYPE_I32),
     ColumnSpec::new(COL_DIRECTION_LIGHTS_RIGHT, "directionLightsRight", TYPE_I32),
     ColumnSpec::new(COL_TC_LEVEL, "tcLevel", TYPE_I32),
@@ -465,8 +487,16 @@ pub const ENVIRONMENT_COLUMNS: [ColumnSpec; 11] = [
     ColumnSpec::new(COL_WIND_DIRECTION, "windDirection", TYPE_F32),
     ColumnSpec::new(COL_SURFACE_GRIP, "surfaceGrip", TYPE_F32),
     ColumnSpec::new(COL_RAIN_INTENSITY, "rainIntensity", TYPE_I32),
-    ColumnSpec::new(COL_RAIN_INTENSITY_IN_10MIN, "rainIntensityIn10min", TYPE_I32),
-    ColumnSpec::new(COL_RAIN_INTENSITY_IN_30MIN, "rainIntensityIn30min", TYPE_I32),
+    ColumnSpec::new(
+        COL_RAIN_INTENSITY_IN_10MIN,
+        "rainIntensityIn10min",
+        TYPE_I32,
+    ),
+    ColumnSpec::new(
+        COL_RAIN_INTENSITY_IN_30MIN,
+        "rainIntensityIn30min",
+        TYPE_I32,
+    ),
 ];
 
 pub const OTHER_CARS_COLUMNS: [ColumnSpec; 6] = [
@@ -477,8 +507,6 @@ pub const OTHER_CARS_COLUMNS: [ColumnSpec; 6] = [
     ColumnSpec::new(COL_CAR_COORDINATES, "carCoordinates", TYPE_BYTES),
     ColumnSpec::new(COL_CAR_ID, "carId", TYPE_BYTES),
 ];
-
-
 
 // ---------------------------------------------------------------------------
 // FileHeader, ChunkHeader, ColumnEntry, IndexEntry (unchanged)
@@ -791,11 +819,15 @@ fn write_schema_cluster(out: &mut Vec<u8>, cluster_id: u16, columns: &[ColumnSpe
 
 pub fn validate_schema(bytes: &[u8]) -> TelemetryResult<()> {
     if bytes.len() < 14 || bytes[0..4] != SCHEMA_MAGIC {
-        return Err(TelemetryError::InvalidFormat("bad schema block".to_string()));
+        return Err(TelemetryError::InvalidFormat(
+            "bad schema block".to_string(),
+        ));
     }
     let hash = u64::from_le_bytes(bytes[4..12].try_into().unwrap());
     if hash != SCHEMA_HASH {
-        return Err(TelemetryError::InvalidFormat("schema hash mismatch".to_string()));
+        return Err(TelemetryError::InvalidFormat(
+            "schema hash mismatch".to_string(),
+        ));
     }
     Ok(())
 }

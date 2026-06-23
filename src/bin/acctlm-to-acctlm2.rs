@@ -6,10 +6,10 @@
 //! If output is not specified, it is derived from the input path by
 //! appending "2" (e.g., "foo.acctlm" → "foo.acctlm2").
 
-use module_live_telemetry::{
-    BinaryTelemetryReader, LiveTelemetryConfig, TelemetryFrame, TelemetryError, TelemetryResult,
-};
 use module_live_telemetry::writer_v2::BinaryTelemetryWriterV2;
+use module_live_telemetry::{
+    BinaryTelemetryReader, LiveTelemetryConfig, TelemetryError, TelemetryFrame, TelemetryResult,
+};
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -68,10 +68,9 @@ fn run() -> TelemetryResult<()> {
 
     // ---- Step 1: Open v1 file ----
     eprintln!("Reading {}...", input_path.display());
-    let reader = BinaryTelemetryReader::open(&input_path)
-        .map_err(|e| TelemetryError::InvalidArgument(format!(
-            "failed to open '{}': {}", input_path.display(), e
-        )))?;
+    let reader = BinaryTelemetryReader::open(&input_path).map_err(|e| {
+        TelemetryError::InvalidArgument(format!("failed to open '{}': {}", input_path.display(), e))
+    })?;
     let metadata = reader.metadata().clone();
 
     // ---- Step 2: Read all cluster samples ----
@@ -131,16 +130,17 @@ fn run() -> TelemetryResult<()> {
     };
 
     let mut writer = BinaryTelemetryWriterV2::create_file(&output_path, metadata.clone(), config)
-        .map_err(|e| TelemetryError::InvalidArgument(format!(
+        .map_err(|e| {
+        TelemetryError::InvalidArgument(format!(
             "failed to create output file '{}': {}",
-            output_path.display(), e
-        )))?;
+            output_path.display(),
+            e
+        ))
+    })?;
 
     for (idx, frame) in frames.iter().enumerate() {
         writer.write_frame(frame).map_err(|e| {
-            TelemetryError::InvalidArgument(format!(
-                "failed to write frame {idx}: {e}"
-            ))
+            TelemetryError::InvalidArgument(format!("failed to write frame {idx}: {e}"))
         })?;
         if (idx + 1) % 1000 == 0 {
             eprintln!("  {}/{} frames written...", idx + 1, n);
@@ -149,17 +149,14 @@ fn run() -> TelemetryResult<()> {
 
     eprintln!("Finishing output file...");
     let summary = writer.finish().map_err(|e| {
-        TelemetryError::InvalidArgument(format!(
-            "failed to finish output file: {e}"
-        ))
+        TelemetryError::InvalidArgument(format!("failed to finish output file: {e}"))
     })?;
 
     // ---- Step 5: Verify roundtrip ----
     eprintln!("Verifying output...");
-    let v2_reader = BinaryTelemetryReader::open(&output_path)
-        .map_err(|e| TelemetryError::InvalidArgument(format!(
-            "failed to open output for verification: {e}"
-        )))?;
+    let v2_reader = BinaryTelemetryReader::open(&output_path).map_err(|e| {
+        TelemetryError::InvalidArgument(format!("failed to open output for verification: {e}"))
+    })?;
     let v2_frames = v2_reader.read_all_frames()?;
 
     if v2_frames.len() != n {

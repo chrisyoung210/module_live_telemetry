@@ -1,4 +1,4 @@
-﻿//! V2 binary telemetry reader 鈥?mmap-based selective column access.
+//! V2 binary telemetry reader 鈥?mmap-based selective column access.
 //!
 //! [`BinaryTelemetryReaderV2`] memory-maps the file and parses the header,
 //! schema, and footer on open. Row groups are read on demand using the
@@ -12,18 +12,15 @@
 
 use crate::encode_v2::decode_column;
 use crate::error::{TelemetryError, TelemetryResult};
-use crate::format::{
-    read_f64, read_i32, read_u16, read_u32, read_u64, x1000_to_hz,
-};
+use crate::format::{read_f64, read_i32, read_u16, read_u32, read_u64, x1000_to_hz};
 use crate::format_v2::{
-    ColumnEntryV2, FileHeaderV2, FooterV2, GroupId,
-    LapIndexEntryV2, RowGroupHeader, SchemaBlockV2, SkipIndexEntry,
+    ColumnEntryV2, FileHeaderV2, FooterV2, GroupId, LapIndexEntryV2, RowGroupHeader, SchemaBlockV2,
+    SkipIndexEntry,
 };
 use crate::mmap_win::MmapFile;
 use crate::types::{
-    CarStateSample, ControlSample, EnvironmentSample, MotionSample,
-    OtherCarsSample, PowertrainSample, RecordingSummary, SessionMetadata,
-    SessionSample, TimingSample, TyreSample,
+    CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
+    PowertrainSample, RecordingSummary, SessionMetadata, SessionSample, TimingSample, TyreSample,
 };
 use crate::writer::TelemetryFrame;
 
@@ -40,7 +37,9 @@ fn decode_metadata_v2(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
     let mut magic = [0u8; 4];
     cursor.read_exact(&mut magic)?;
     if magic != *b"META" {
-        return Err(TelemetryError::InvalidFormat("bad metadata block".to_string()));
+        return Err(TelemetryError::InvalidFormat(
+            "bad metadata block".to_string(),
+        ));
     }
     let created_unix_ns = read_u64(&mut cursor)?;
     let poll_hz = x1000_to_hz(read_u32(&mut cursor)?);
@@ -62,8 +61,12 @@ fn decode_metadata_v2(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
         let mut ac = vec![0u8; ac_len];
         let _ = cursor.read_exact(&mut sm);
         let _ = cursor.read_exact(&mut ac);
-        (String::from_utf8_lossy(&sm).into_owned(),
-         String::from_utf8_lossy(&ac).into_owned(), ns, nc)
+        (
+            String::from_utf8_lossy(&sm).into_owned(),
+            String::from_utf8_lossy(&ac).into_owned(),
+            ns,
+            nc,
+        )
     } else {
         (String::new(), String::new(), 0, 0)
     };
@@ -86,9 +89,19 @@ fn decode_metadata_v2(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
     Ok(SessionMetadata {
         track_name: String::from_utf8_lossy(&track).into_owned(),
         car_model: String::from_utf8_lossy(&car).into_owned(),
-        created_unix_ns, poll_hz, chunk_rows,
-        sm_version, ac_version, number_of_sessions, num_cars,
-        sector_count, max_rpm, max_torque, max_power, max_fuel, penalties_enabled,
+        created_unix_ns,
+        poll_hz,
+        chunk_rows,
+        sm_version,
+        ac_version,
+        number_of_sessions,
+        num_cars,
+        sector_count,
+        max_rpm,
+        max_torque,
+        max_power,
+        max_fuel,
+        penalties_enabled,
         raw_static_bytes: {
             let remaining3 = bytes.len().saturating_sub(cursor.position() as usize);
             if remaining3 >= 4 {
@@ -97,16 +110,25 @@ fn decode_metadata_v2(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
                     let mut raw = vec![0u8; raw_len];
                     let _ = cursor.read_exact(&mut raw);
                     raw
-                } else { Vec::new() }
-            } else { Vec::new() }
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
         },
         session_type: {
             let remaining4 = bytes.len().saturating_sub(cursor.position() as usize);
             if remaining4 >= 8 {
                 let has = read_i32(&mut cursor).unwrap_or(0);
-                if has != 0 { Some(read_i32(&mut cursor).unwrap_or(0)) }
-                else { None }
-            } else { None }
+                if has != 0 {
+                    Some(read_i32(&mut cursor).unwrap_or(0))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         },
     })
 }
@@ -166,9 +188,7 @@ impl BinaryTelemetryReaderV2 {
         let parsed = {
             let data = mmap.as_slice();
             if data.is_empty() {
-                return Err(TelemetryError::InvalidFormat(
-                    "empty file".to_string(),
-                ));
+                return Err(TelemetryError::InvalidFormat("empty file".to_string()));
             }
             Self::parse_file_content(data)?
         };
@@ -240,16 +260,12 @@ impl BinaryTelemetryReaderV2 {
                 "first_row_group_offset past eof".to_string(),
             ));
         }
-        let metadata = decode_metadata_v2(
-            &data[header.metadata_offset as usize..meta_end],
-        )?;
+        let metadata = decode_metadata_v2(&data[header.metadata_offset as usize..meta_end])?;
 
         // 4. Parse footer (if present)
         let (skip_entries, lap_entries, footer_offset) =
             if header.footer_offset > 0 && (header.footer_offset as usize + 20) <= data.len() {
-                let mut footer_cursor = Cursor::new(
-                    &data[header.footer_offset as usize..],
-                );
+                let mut footer_cursor = Cursor::new(&data[header.footer_offset as usize..]);
                 let footer = FooterV2::read_from(&mut footer_cursor)?;
                 let skip = footer.read_skip_entries(&mut footer_cursor)?;
                 let laps = footer.read_lap_entries(&mut footer_cursor)?;
@@ -329,10 +345,9 @@ impl BinaryTelemetryReaderV2 {
         let group_data = self.read_group_frames(&all_groups, None, None)?;
 
         // Get tick and timestamp from FrameMeta
-        let frame_meta = group_data.get(&GroupId::FrameMeta)
-            .ok_or_else(|| TelemetryError::InvalidFormat(
-                "FrameMeta group missing".to_string()
-            ))?;
+        let frame_meta = group_data
+            .get(&GroupId::FrameMeta)
+            .ok_or_else(|| TelemetryError::InvalidFormat("FrameMeta group missing".to_string()))?;
 
         if frame_meta.is_empty() {
             return Ok(Vec::new());
@@ -353,9 +368,7 @@ impl BinaryTelemetryReaderV2 {
                 0.0
             };
 
-            let frame = self.reconstruct_frame(
-                i, tick, ts_ns as u64, &group_data,
-            );
+            let frame = self.reconstruct_frame(i, tick, ts_ns as u64, &group_data);
             frames.push(frame);
         }
 
@@ -391,8 +404,13 @@ impl BinaryTelemetryReaderV2 {
 
     /// Get column value at row_idx from group, column_id.
     /// Returns 0.0 if column not found or index out of bounds.
-    fn col_val(&self, group_data: &HashMap<GroupId, Vec<Vec<f64>>>,
-               group: GroupId, col_id: u16, row_idx: usize) -> f64 {
+    fn col_val(
+        &self,
+        group_data: &HashMap<GroupId, Vec<Vec<f64>>>,
+        group: GroupId,
+        col_id: u16,
+        row_idx: usize,
+    ) -> f64 {
         if let Some(cols) = group_data.get(&group) {
             // Find column by scanning for the column_id in the schema
             let col_index = self.find_column_index_in_group(group, col_id);
@@ -408,15 +426,21 @@ impl BinaryTelemetryReaderV2 {
     }
 
     /// Get column values at row_idx for bytes-type array column.
-    fn col_bytes(&self, group_data: &HashMap<GroupId, Vec<Vec<f64>>>,
-                 group: GroupId, col_id: u16, row_idx: usize) -> Vec<f64> {
+    fn col_bytes(
+        &self,
+        group_data: &HashMap<GroupId, Vec<Vec<f64>>>,
+        group: GroupId,
+        col_id: u16,
+        row_idx: usize,
+    ) -> Vec<f64> {
         if let Some(cols) = group_data.get(&group) {
             let col_index = self.find_column_index_in_group(group, col_id);
             if let Some(ci) = col_index {
                 if ci < cols.len() {
                     let col = &cols[ci];
                     // Compute total rows from FrameMeta sample_tick column
-                    let total_rows = group_data.get(&GroupId::FrameMeta)
+                    let total_rows = group_data
+                        .get(&GroupId::FrameMeta)
                         .and_then(|fm| fm.first())
                         .map(|ticks| ticks.len())
                         .unwrap_or(0);
@@ -459,7 +483,10 @@ impl BinaryTelemetryReaderV2 {
     }
 
     fn build_controls(
-        &self, row_idx: usize, tick: u64, ts_ns: u64,
+        &self,
+        row_idx: usize,
+        tick: u64,
+        ts_ns: u64,
         gd: &HashMap<GroupId, Vec<Vec<f64>>>,
     ) -> ControlSample {
         let g = GroupId::DriverInputs;
@@ -480,7 +507,10 @@ impl BinaryTelemetryReaderV2 {
     }
 
     fn build_motion(
-        &self, row_idx: usize, tick: u64, ts_ns: u64,
+        &self,
+        row_idx: usize,
+        tick: u64,
+        ts_ns: u64,
         gd: &HashMap<GroupId, Vec<Vec<f64>>>,
     ) -> MotionSample {
         let g = GroupId::VehicleDynamics;
@@ -502,7 +532,10 @@ impl BinaryTelemetryReaderV2 {
     }
 
     fn build_tyres(
-        &self, row_idx: usize, tick: u64, ts_ns: u64,
+        &self,
+        row_idx: usize,
+        tick: u64,
+        ts_ns: u64,
         gd: &HashMap<GroupId, Vec<Vec<f64>>>,
     ) -> TyreSample {
         let g = GroupId::Tyres;
@@ -542,7 +575,10 @@ impl BinaryTelemetryReaderV2 {
     }
 
     fn build_powertrain(
-        &self, row_idx: usize, tick: u64, ts_ns: u64,
+        &self,
+        row_idx: usize,
+        tick: u64,
+        ts_ns: u64,
         gd: &HashMap<GroupId, Vec<Vec<f64>>>,
     ) -> PowertrainSample {
         let g = GroupId::DriverInputs;
@@ -575,7 +611,10 @@ impl BinaryTelemetryReaderV2 {
     }
 
     fn build_session(
-        &self, row_idx: usize, tick: u64, ts_ns: u64,
+        &self,
+        row_idx: usize,
+        tick: u64,
+        ts_ns: u64,
         gd: &HashMap<GroupId, Vec<Vec<f64>>>,
     ) -> SessionSample {
         // Session fields are spread across Timing, Environment, and ColdStorage groups
@@ -633,7 +672,10 @@ impl BinaryTelemetryReaderV2 {
     }
 
     fn build_timing(
-        &self, row_idx: usize, tick: u64, ts_ns: u64,
+        &self,
+        row_idx: usize,
+        tick: u64,
+        ts_ns: u64,
         gd: &HashMap<GroupId, Vec<Vec<f64>>>,
     ) -> TimingSample {
         let g = GroupId::Timing;
@@ -670,7 +712,10 @@ impl BinaryTelemetryReaderV2 {
     }
 
     fn build_car_state(
-        &self, row_idx: usize, tick: u64, ts_ns: u64,
+        &self,
+        row_idx: usize,
+        tick: u64,
+        ts_ns: u64,
         gd: &HashMap<GroupId, Vec<Vec<f64>>>,
     ) -> CarStateSample {
         let g = GroupId::ColdStorage;
@@ -728,7 +773,10 @@ impl BinaryTelemetryReaderV2 {
     }
 
     fn build_environment(
-        &self, row_idx: usize, tick: u64, ts_ns: u64,
+        &self,
+        row_idx: usize,
+        tick: u64,
+        ts_ns: u64,
         gd: &HashMap<GroupId, Vec<Vec<f64>>>,
     ) -> EnvironmentSample {
         let g = GroupId::Environment;
@@ -748,7 +796,10 @@ impl BinaryTelemetryReaderV2 {
     }
 
     fn build_other_cars(
-        &self, row_idx: usize, tick: u64, ts_ns: u64,
+        &self,
+        row_idx: usize,
+        tick: u64,
+        ts_ns: u64,
         gd: &HashMap<GroupId, Vec<Vec<f64>>>,
     ) -> OtherCarsSample {
         let g = GroupId::ColdStorage;
@@ -775,11 +826,13 @@ impl BinaryTelemetryReaderV2 {
     /// Read frames belonging to a specific lap (1-based).
     pub fn read_lap_frames(&self, lap_number: i32) -> TelemetryResult<Vec<TelemetryFrame>> {
         // Find the lap entry
-        let lap_entry = self.lap_entries.iter()
+        let lap_entry = self
+            .lap_entries
+            .iter()
             .find(|e| e.lap_number == lap_number)
-            .ok_or_else(|| TelemetryError::InvalidArgument(format!(
-                "lap {lap_number} not found in lap index"
-            )))?;
+            .ok_or_else(|| {
+                TelemetryError::InvalidArgument(format!("lap {lap_number} not found in lap index"))
+            })?;
 
         // Read all groups for the lap tick range
         let all_groups: [GroupId; 7] = [
@@ -798,10 +851,9 @@ impl BinaryTelemetryReaderV2 {
 
         let group_data = self.read_group_frames(&all_groups, start_frame, end_frame)?;
 
-        let frame_meta = group_data.get(&GroupId::FrameMeta)
-            .ok_or_else(|| TelemetryError::InvalidFormat(
-                "FrameMeta group missing".to_string()
-            ))?;
+        let frame_meta = group_data
+            .get(&GroupId::FrameMeta)
+            .ok_or_else(|| TelemetryError::InvalidFormat("FrameMeta group missing".to_string()))?;
 
         if frame_meta.is_empty() {
             return Ok(Vec::new());
@@ -819,9 +871,7 @@ impl BinaryTelemetryReaderV2 {
                 0.0
             };
 
-            let frame = self.reconstruct_frame(
-                i, tick, ts_ns as u64, &group_data,
-            );
+            let frame = self.reconstruct_frame(i, tick, ts_ns as u64, &group_data);
             frames.push(frame);
         }
 
@@ -849,9 +899,7 @@ impl BinaryTelemetryReaderV2 {
         let fm = gd
             .get(&GroupId::FrameMeta)
             .filter(|cols| !cols.is_empty())
-            .ok_or_else(|| TelemetryError::InvalidFormat(
-                "FrameMeta group missing".to_string(),
-            ))?;
+            .ok_or_else(|| TelemetryError::InvalidFormat("FrameMeta group missing".to_string()))?;
         let ticks = &fm[0];
         let n = ticks.len();
         let mut out = Vec::with_capacity(n);
@@ -896,7 +944,10 @@ impl BinaryTelemetryReaderV2 {
     /// from `append_lap_index` (which returns early for ACT2 magic).
     pub fn read_lap_boundary_data_v2(&self) -> TelemetryResult<Vec<(u64, f32, i32)>> {
         let samples = self.read_all_session_v2()?;
-        Ok(samples.into_iter().map(|s| (s.sample_tick, s.normalized_car_position, s.is_valid_lap)).collect())
+        Ok(samples
+            .into_iter()
+            .map(|s| (s.sample_tick, s.normalized_car_position, s.is_valid_lap))
+            .collect())
     }
 
     /// Read all TimingSample frames (FrameMeta + Timing group).
@@ -921,74 +972,124 @@ impl BinaryTelemetryReaderV2 {
 
     // ── read_*_range_v2 — tick-range reads ──
 
-    pub fn read_controls_range_v2(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<ControlSample>> {
+    pub fn read_controls_range_v2(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<ControlSample>> {
         self.reconstruct_from_groups(
             &[GroupId::FrameMeta, GroupId::DriverInputs],
-            Some(start_tick), Some(end_tick),
+            Some(start_tick),
+            Some(end_tick),
             |slf, i, tick, ts_ns, gd| slf.build_controls(i, tick, ts_ns, gd),
         )
     }
 
-    pub fn read_motion_range_v2(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<MotionSample>> {
+    pub fn read_motion_range_v2(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<MotionSample>> {
         self.reconstruct_from_groups(
             &[GroupId::FrameMeta, GroupId::VehicleDynamics],
-            Some(start_tick), Some(end_tick),
+            Some(start_tick),
+            Some(end_tick),
             |slf, i, tick, ts_ns, gd| slf.build_motion(i, tick, ts_ns, gd),
         )
     }
 
-    pub fn read_tyres_range_v2(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<TyreSample>> {
+    pub fn read_tyres_range_v2(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<TyreSample>> {
         self.reconstruct_from_groups(
             &[GroupId::FrameMeta, GroupId::Tyres],
-            Some(start_tick), Some(end_tick),
+            Some(start_tick),
+            Some(end_tick),
             |slf, i, tick, ts_ns, gd| slf.build_tyres(i, tick, ts_ns, gd),
         )
     }
 
-    pub fn read_powertrain_range_v2(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<PowertrainSample>> {
+    pub fn read_powertrain_range_v2(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<PowertrainSample>> {
         self.reconstruct_from_groups(
             &[GroupId::FrameMeta, GroupId::DriverInputs],
-            Some(start_tick), Some(end_tick),
+            Some(start_tick),
+            Some(end_tick),
             |slf, i, tick, ts_ns, gd| slf.build_powertrain(i, tick, ts_ns, gd),
         )
     }
 
-    pub fn read_session_range_v2(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<SessionSample>> {
+    pub fn read_session_range_v2(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<SessionSample>> {
         self.reconstruct_from_groups(
-            &[GroupId::FrameMeta, GroupId::Timing, GroupId::Environment, GroupId::ColdStorage],
-            Some(start_tick), Some(end_tick),
+            &[
+                GroupId::FrameMeta,
+                GroupId::Timing,
+                GroupId::Environment,
+                GroupId::ColdStorage,
+            ],
+            Some(start_tick),
+            Some(end_tick),
             |slf, i, tick, ts_ns, gd| slf.build_session(i, tick, ts_ns, gd),
         )
     }
 
-    pub fn read_timing_range_v2(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<TimingSample>> {
+    pub fn read_timing_range_v2(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<TimingSample>> {
         self.reconstruct_from_groups(
             &[GroupId::FrameMeta, GroupId::Timing],
-            Some(start_tick), Some(end_tick),
+            Some(start_tick),
+            Some(end_tick),
             |slf, i, tick, ts_ns, gd| slf.build_timing(i, tick, ts_ns, gd),
         )
     }
 
-    pub fn read_car_state_range_v2(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<CarStateSample>> {
+    pub fn read_car_state_range_v2(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<CarStateSample>> {
         self.reconstruct_from_groups(
             &[GroupId::FrameMeta, GroupId::ColdStorage],
-            Some(start_tick), Some(end_tick),
+            Some(start_tick),
+            Some(end_tick),
             |slf, i, tick, ts_ns, gd| slf.build_car_state(i, tick, ts_ns, gd),
         )
     }
 
-    pub fn read_environment_range_v2(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<EnvironmentSample>> {
+    pub fn read_environment_range_v2(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<EnvironmentSample>> {
         self.reconstruct_from_groups(
             &[GroupId::FrameMeta, GroupId::Environment],
-            Some(start_tick), Some(end_tick),
+            Some(start_tick),
+            Some(end_tick),
             |slf, i, tick, ts_ns, gd| slf.build_environment(i, tick, ts_ns, gd),
         )
     }
 
-    pub fn read_other_cars_range_v2(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<OtherCarsSample>> {
+    pub fn read_other_cars_range_v2(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<OtherCarsSample>> {
         self.reconstruct_from_groups(
             &[GroupId::FrameMeta, GroupId::ColdStorage],
-            Some(start_tick), Some(end_tick),
+            Some(start_tick),
+            Some(end_tick),
             |slf, i, tick, ts_ns, gd| slf.build_other_cars(i, tick, ts_ns, gd),
         )
     }
@@ -1017,10 +1118,12 @@ impl BinaryTelemetryReaderV2 {
 
         match key.item_type {
             ItemType::Raw => {
-                let col_id = path_to_column_id(&key.name)
-                    .ok_or_else(|| TelemetryError::InvalidArgument(format!(
-                        "unknown raw column path: {}", key.name
-                    )))?;
+                let col_id = path_to_column_id(&key.name).ok_or_else(|| {
+                    TelemetryError::InvalidArgument(format!(
+                        "unknown raw column path: {}",
+                        key.name
+                    ))
+                })?;
 
                 let target_group = crate::format_v2::column_group(col_id);
 
@@ -1033,15 +1136,17 @@ impl BinaryTelemetryReaderV2 {
                 let gd = self.read_group_frames(&groups, s, e)?;
 
                 let cols = gd.get(&target_group).ok_or_else(|| {
-                    TelemetryError::InvalidFormat(format!(
-                        "no data for group {:?}", target_group
-                    ))
+                    TelemetryError::InvalidFormat(format!("no data for group {:?}", target_group))
                 })?;
 
-                let col_index = self.find_column_index_in_group(target_group, col_id as u16)
-                    .ok_or_else(|| TelemetryError::InvalidFormat(format!(
-                        "column {:?} not found in schema", col_id
-                    )))?;
+                let col_index = self
+                    .find_column_index_in_group(target_group, col_id as u16)
+                    .ok_or_else(|| {
+                        TelemetryError::InvalidFormat(format!(
+                            "column {:?} not found in schema",
+                            col_id
+                        ))
+                    })?;
 
                 if col_index >= cols.len() {
                     return Ok(Vec::new());
@@ -1057,7 +1162,8 @@ impl BinaryTelemetryReaderV2 {
                 Ok(out)
             }
             ItemType::Calculated => Err(TelemetryError::InvalidArgument(
-                "calc:* items are computed at read time by ComputeRegistry, not stored in acctlm2".to_string(),
+                "calc:* items are computed at read time by ComputeRegistry, not stored in acctlm2"
+                    .to_string(),
             )),
             ItemType::System => Err(TelemetryError::InvalidArgument(
                 "system:* items are not stored in acctlm2".to_string(),
@@ -1091,15 +1197,15 @@ impl BinaryTelemetryReaderV2 {
 
             // Find all row groups that contain columns for this group
             // and that overlap with [start_frame, end_frame].
-            let relevant_entries: Vec<&SkipIndexEntry> = self.skip_entries.iter()
+            let relevant_entries: Vec<&SkipIndexEntry> = self
+                .skip_entries
+                .iter()
                 .filter(|e| e.access_group == group as u16)
-                .filter(|entry| {
-                    match (start_frame, end_frame) {
-                        (None, None) => true,
-                        (Some(s), None) => entry.frame_end >= s,
-                        (None, Some(ef)) => entry.frame_start <= ef,
-                        (Some(s), Some(ef)) => entry.frame_start <= ef && entry.frame_end >= s,
-                    }
+                .filter(|entry| match (start_frame, end_frame) {
+                    (None, None) => true,
+                    (Some(s), None) => entry.frame_end >= s,
+                    (None, Some(ef)) => entry.frame_start <= ef,
+                    (Some(s), Some(ef)) => entry.frame_start <= ef && entry.frame_end >= s,
                 })
                 .collect();
 
@@ -1109,17 +1215,15 @@ impl BinaryTelemetryReaderV2 {
                     continue;
                 }
                 // Read all row groups
-                let col_data = self.read_group_from_all_row_groups(
-                    data, group, start_frame, end_frame,
-                )?;
+                let col_data =
+                    self.read_group_from_all_row_groups(data, group, start_frame, end_frame)?;
                 result.insert(group, col_data);
                 continue;
             }
 
             // Collect unique row group indices
-            let mut rg_indices: Vec<u32> = relevant_entries.iter()
-                .map(|e| e.row_group_index)
-                .collect();
+            let mut rg_indices: Vec<u32> =
+                relevant_entries.iter().map(|e| e.row_group_index).collect();
             rg_indices.sort();
             rg_indices.dedup();
 
@@ -1137,7 +1241,9 @@ impl BinaryTelemetryReaderV2 {
                 let rg_header = RowGroupHeader::read_from(&mut cursor)?;
 
                 // Find the group entry for this group
-                let group_entry = rg_header.groups.iter()
+                let group_entry = rg_header
+                    .groups
+                    .iter()
                     .find(|ge| ge.group_id == group as u16);
 
                 if let Some(ge) = group_entry {
@@ -1173,18 +1279,24 @@ impl BinaryTelemetryReaderV2 {
                             if e.column_id == entry.column_id {
                                 break;
                             }
-                            col_data_offset = col_data_offset.checked_add(e.byte_len as usize)
-                                .ok_or_else(|| TelemetryError::InvalidFormat(
-                                    "column data offset overflow".to_string()
-                                ))?;
+                            col_data_offset = col_data_offset
+                                .checked_add(e.byte_len as usize)
+                                .ok_or_else(|| {
+                                    TelemetryError::InvalidFormat(
+                                        "column data offset overflow".to_string(),
+                                    )
+                                })?;
                         }
-                        let col_end = col_data_offset.checked_add(entry.byte_len as usize)
-                            .ok_or_else(|| TelemetryError::InvalidFormat(
-                                "column byte length overflow".to_string()
-                            ))?;
+                        let col_end = col_data_offset
+                            .checked_add(entry.byte_len as usize)
+                            .ok_or_else(|| {
+                                TelemetryError::InvalidFormat(
+                                    "column byte length overflow".to_string(),
+                                )
+                            })?;
                         if col_end > group_bytes.len() {
                             return Err(TelemetryError::InvalidFormat(
-                                "column data extends past group end".to_string()
+                                "column data extends past group end".to_string(),
                             ));
                         }
                         let col_bytes = &group_bytes[col_data_offset..col_end];
@@ -1225,15 +1337,18 @@ impl BinaryTelemetryReaderV2 {
                     let ticks = &meta_cols[0];
                     let row_count = ticks.len();
                     // Build keep mask
-                    let keep: Vec<bool> = ticks.iter().map(|&t| {
-                        let tu = t as u64;
-                        match (start_frame, end_frame) {
-                            (None, None) => true,
-                            (Some(s), None) => tu >= s,
-                            (None, Some(e)) => tu <= e,
-                            (Some(s), Some(e)) => tu >= s && tu <= e,
-                        }
-                    }).collect();
+                    let keep: Vec<bool> = ticks
+                        .iter()
+                        .map(|&t| {
+                            let tu = t as u64;
+                            match (start_frame, end_frame) {
+                                (None, None) => true,
+                                (Some(s), None) => tu >= s,
+                                (None, Some(e)) => tu <= e,
+                                (Some(s), Some(e)) => tu >= s && tu <= e,
+                            }
+                        })
+                        .collect();
                     let keep_count = keep.iter().filter(|&&k| k).count();
                     // Apply to every group
                     for (_gid, cols) in result.iter_mut() {
@@ -1279,7 +1394,9 @@ impl BinaryTelemetryReaderV2 {
                 }
             }
 
-            let group_entry = rg_header.groups.iter()
+            let group_entry = rg_header
+                .groups
+                .iter()
                 .find(|ge| ge.group_id == group as u16);
 
             if let Some(ge) = group_entry {
@@ -1308,18 +1425,22 @@ impl BinaryTelemetryReaderV2 {
                 let mut data_offset = 4 + col_count * 40;
 
                 for entry in &col_entries {
-                    let col_end = data_offset.checked_add(entry.byte_len as usize)
-                        .ok_or_else(|| TelemetryError::InvalidFormat(
-                            "column byte length overflow".to_string()
-                        ))?;
+                    let col_end = data_offset
+                        .checked_add(entry.byte_len as usize)
+                        .ok_or_else(|| {
+                            TelemetryError::InvalidFormat("column byte length overflow".to_string())
+                        })?;
                     if col_end > group_bytes.len() {
                         return Err(TelemetryError::InvalidFormat(
-                            "column data extends past group end".to_string()
+                            "column data extends past group end".to_string(),
                         ));
                     }
                     let col_bytes = &group_bytes[data_offset..col_end];
                     let decoded = decode_column(col_bytes, entry.crc32)?;
-                    let col_idx = col_entries.iter().position(|e| e.column_id == entry.column_id).unwrap_or(0);
+                    let col_idx = col_entries
+                        .iter()
+                        .position(|e| e.column_id == entry.column_id)
+                        .unwrap_or(0);
                     if col_idx < all_cols.len() {
                         all_cols[col_idx].extend(decoded);
                     }
@@ -1336,10 +1457,7 @@ impl BinaryTelemetryReaderV2 {
     // =======================================================================
 
     /// Scan all row group headers to collect file offsets and total sample count.
-    fn scan_row_groups(
-        data: &[u8],
-        first_offset: usize,
-    ) -> TelemetryResult<(Vec<u64>, u64)> {
+    fn scan_row_groups(data: &[u8], first_offset: usize) -> TelemetryResult<(Vec<u64>, u64)> {
         let mut offsets = Vec::new();
         let mut total_samples = 0u64;
         let mut pos = first_offset;
@@ -1367,20 +1485,22 @@ impl BinaryTelemetryReaderV2 {
                 let group_end = pos
                     .checked_add(ge.offset as usize)
                     .and_then(|v| v.checked_add(ge.byte_len as usize))
-                    .ok_or_else(|| TelemetryError::InvalidFormat(
-                        "row group offset overflow".to_string()
-                    ))?;
+                    .ok_or_else(|| {
+                        TelemetryError::InvalidFormat("row group offset overflow".to_string())
+                    })?;
                 if group_end > data.len() {
                     return Err(TelemetryError::InvalidFormat(
-                        "row group extends past file end".to_string()
+                        "row group extends past file end".to_string(),
                     ));
                 }
-                if group_end > rg_end { rg_end = group_end; }
+                if group_end > rg_end {
+                    rg_end = group_end;
+                }
             }
 
             if rg_end <= pos {
                 return Err(TelemetryError::InvalidFormat(
-                    "row group has zero or negative size".to_string()
+                    "row group has zero or negative size".to_string(),
                 ));
             }
 
@@ -1689,7 +1809,10 @@ mod tests {
     fn test_path_to_col_controls() {
         use crate::format_v2::ColumnId;
         assert_eq!(path_to_column_id("speed_kmh"), Some(ColumnId::SpeedKmh));
-        assert_eq!(path_to_column_id("controls.speed_kmh"), Some(ColumnId::SpeedKmh));
+        assert_eq!(
+            path_to_column_id("controls.speed_kmh"),
+            Some(ColumnId::SpeedKmh)
+        );
         assert_eq!(path_to_column_id("gas"), Some(ColumnId::Gas));
         assert_eq!(path_to_column_id("brake"), Some(ColumnId::Brake));
         assert_eq!(path_to_column_id("clutch"), Some(ColumnId::Clutch));
@@ -1707,8 +1830,14 @@ mod tests {
         assert_eq!(path_to_column_id("heading"), Some(ColumnId::Heading));
         assert_eq!(path_to_column_id("pitch"), Some(ColumnId::Pitch));
         assert_eq!(path_to_column_id("roll"), Some(ColumnId::Roll));
-        assert_eq!(path_to_column_id("local_velocity"), Some(ColumnId::LocalVelocity));
-        assert_eq!(path_to_column_id("local_angular_vel"), Some(ColumnId::LocalAngularVel));
+        assert_eq!(
+            path_to_column_id("local_velocity"),
+            Some(ColumnId::LocalVelocity)
+        );
+        assert_eq!(
+            path_to_column_id("local_angular_vel"),
+            Some(ColumnId::LocalAngularVel)
+        );
     }
 
     #[test]
@@ -1716,10 +1845,16 @@ mod tests {
         use crate::format_v2::ColumnId;
         assert_eq!(path_to_column_id("wheel_slip"), Some(ColumnId::WheelSlip));
         assert_eq!(path_to_column_id("wheel_load"), Some(ColumnId::WheelLoad));
-        assert_eq!(path_to_column_id("wheels_pressure"), Some(ColumnId::WheelsPressure));
+        assert_eq!(
+            path_to_column_id("wheels_pressure"),
+            Some(ColumnId::WheelsPressure)
+        );
         assert_eq!(path_to_column_id("tyre_wear"), Some(ColumnId::TyreWear));
         assert_eq!(path_to_column_id("brake_temp"), Some(ColumnId::BrakeTemp));
-        assert_eq!(path_to_column_id("number_of_tyres_out"), Some(ColumnId::NumberOfTyresOut));
+        assert_eq!(
+            path_to_column_id("number_of_tyres_out"),
+            Some(ColumnId::NumberOfTyresOut)
+        );
     }
 
     #[test]
@@ -1727,8 +1862,14 @@ mod tests {
         use crate::format_v2::ColumnId;
         assert_eq!(path_to_column_id("turbo_boost"), Some(ColumnId::TurboBoost));
         assert_eq!(path_to_column_id("kers_charge"), Some(ColumnId::KersCharge));
-        assert_eq!(path_to_column_id("drs_available"), Some(ColumnId::DrsAvailable));
-        assert_eq!(path_to_column_id("ers_recovery_level"), Some(ColumnId::ErsRecoveryLevel));
+        assert_eq!(
+            path_to_column_id("drs_available"),
+            Some(ColumnId::DrsAvailable)
+        );
+        assert_eq!(
+            path_to_column_id("ers_recovery_level"),
+            Some(ColumnId::ErsRecoveryLevel)
+        );
         assert_eq!(path_to_column_id("water_temp"), Some(ColumnId::WaterTemp));
     }
 
@@ -1737,19 +1878,31 @@ mod tests {
         use crate::format_v2::ColumnId;
         assert_eq!(path_to_column_id("status"), Some(ColumnId::Status));
         assert_eq!(path_to_column_id("session"), Some(ColumnId::Session));
-        assert_eq!(path_to_column_id("completed_laps"), Some(ColumnId::CompletedLaps));
+        assert_eq!(
+            path_to_column_id("completed_laps"),
+            Some(ColumnId::CompletedLaps)
+        );
         assert_eq!(path_to_column_id("is_in_pit"), Some(ColumnId::IsInPit));
-        assert_eq!(path_to_column_id("global_yellow"), Some(ColumnId::GlobalYellow));
+        assert_eq!(
+            path_to_column_id("global_yellow"),
+            Some(ColumnId::GlobalYellow)
+        );
     }
 
     #[test]
     fn test_path_to_col_timing() {
         use crate::format_v2::ColumnId;
-        assert_eq!(path_to_column_id("i_current_time"), Some(ColumnId::ICurrentTime));
+        assert_eq!(
+            path_to_column_id("i_current_time"),
+            Some(ColumnId::ICurrentTime)
+        );
         assert_eq!(path_to_column_id("i_last_time"), Some(ColumnId::ILastTime));
         assert_eq!(path_to_column_id("i_best_time"), Some(ColumnId::IBestTime));
         assert_eq!(path_to_column_id("i_split"), Some(ColumnId::ISplit));
-        assert_eq!(path_to_column_id("fuel_estimated_laps"), Some(ColumnId::FuelEstimatedLaps));
+        assert_eq!(
+            path_to_column_id("fuel_estimated_laps"),
+            Some(ColumnId::FuelEstimatedLaps)
+        );
     }
 
     #[test]
@@ -1759,7 +1912,10 @@ mod tests {
         assert_eq!(path_to_column_id("cg_height"), Some(ColumnId::CgHeight));
         assert_eq!(path_to_column_id("brake_bias"), Some(ColumnId::BrakeBias));
         assert_eq!(path_to_column_id("engine_map"), Some(ColumnId::EngineMap));
-        assert_eq!(path_to_column_id("exhaust_temperature"), Some(ColumnId::ExhaustTemperature));
+        assert_eq!(
+            path_to_column_id("exhaust_temperature"),
+            Some(ColumnId::ExhaustTemperature)
+        );
     }
 
     #[test]
@@ -1769,16 +1925,28 @@ mod tests {
         assert_eq!(path_to_column_id("air_temp"), Some(ColumnId::AirTemp));
         assert_eq!(path_to_column_id("road_temp"), Some(ColumnId::RoadTemp));
         assert_eq!(path_to_column_id("wind_speed"), Some(ColumnId::WindSpeed));
-        assert_eq!(path_to_column_id("rain_intensity"), Some(ColumnId::RainIntensity));
+        assert_eq!(
+            path_to_column_id("rain_intensity"),
+            Some(ColumnId::RainIntensity)
+        );
     }
 
     #[test]
     fn test_path_to_col_frame_meta() {
         use crate::format_v2::ColumnId;
         assert_eq!(path_to_column_id("sample_tick"), Some(ColumnId::SampleTick));
-        assert_eq!(path_to_column_id("timestamp_ns"), Some(ColumnId::TimestampNs));
-        assert_eq!(path_to_column_id("physics_packet_id"), Some(ColumnId::PhysicsPacketId));
-        assert_eq!(path_to_column_id("graphics_packet_id"), Some(ColumnId::GraphicsPacketId));
+        assert_eq!(
+            path_to_column_id("timestamp_ns"),
+            Some(ColumnId::TimestampNs)
+        );
+        assert_eq!(
+            path_to_column_id("physics_packet_id"),
+            Some(ColumnId::PhysicsPacketId)
+        );
+        assert_eq!(
+            path_to_column_id("graphics_packet_id"),
+            Some(ColumnId::GraphicsPacketId)
+        );
     }
 
     #[test]
@@ -1798,4 +1966,3 @@ mod tests {
         assert_eq!(path_to_column_id("abs_physics"), Some(ColumnId::AbsPhysics));
     }
 }
-

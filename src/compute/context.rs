@@ -6,6 +6,8 @@ use crate::TelemetryFrame;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+const SESSION_BEST_REFERENCE_PATH: &str = "<session-best>";
+
 /// 参考数据来源标识
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReferenceSource {
@@ -13,6 +15,20 @@ pub struct ReferenceSource {
     pub file_path: PathBuf,
     /// 圈号
     pub lap_number: i32,
+}
+
+impl ReferenceSource {
+    /// Internal runtime reference used by `delta_time_to_session_best_lap`.
+    pub fn session_best() -> Self {
+        Self {
+            file_path: PathBuf::from(SESSION_BEST_REFERENCE_PATH),
+            lap_number: 0,
+        }
+    }
+
+    pub fn is_session_best(&self) -> bool {
+        self.file_path == PathBuf::from(SESSION_BEST_REFERENCE_PATH) && self.lap_number == 0
+    }
 }
 
 /// 实时计算请求
@@ -81,8 +97,8 @@ impl<'a> ComputeContext<'a> {
 mod tests {
     use super::*;
     use crate::types::{
-        CarStateSample, ControlSample, EnvironmentSample, MotionSample,
-        OtherCarsSample, PowertrainSample, SessionSample, TimingSample, TyreSample,
+        CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
+        PowertrainSample, SessionSample, TimingSample, TyreSample,
     };
 
     fn make_empty_frame() -> TelemetryFrame {

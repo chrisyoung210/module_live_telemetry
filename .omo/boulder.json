@@ -1,0 +1,265 @@
+{
+  "schema_version": 2,
+  "active_work_id": "replay-mock-telemetry-d9653965",
+  "works": {
+    "replay-mock-telemetry-d9653965": {
+      "work_id": "replay-mock-telemetry-d9653965",
+      "active_plan": "D:\\WorkSpaces\\VibeCoding\\racing_team\\module_live_telemetry\\.omo\\plans\\replay-mock-telemetry.md",
+      "plan_name": "replay-mock-telemetry",
+      "status": "completed",
+      "started_at": "2026-06-19T12:05:36.968Z",
+      "updated_at": "2026-06-19T12:43:06.073Z",
+      "session_ids": [
+        "opencode:ses_12059e5f3ffe98hecSFtOgN2A8"
+      ],
+      "session_origins": {
+        "opencode:ses_12059e5f3ffe98hecSFtOgN2A8": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "新增 StopReason::FramesExhausted + RecordingStatus::ReplayStarted 枚举变体",
+          "session_id": "opencode:ses_12039a13cffeUmasrfVccX1FM9",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-06-19T12:08:23.567Z",
+          "started_at": "2026-06-19T12:07:24.160Z",
+          "status": "completed",
+          "ended_at": "2026-06-19T12:08:23.567Z",
+          "elapsed_ms": 59407
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "新增 ReplayRequest 类型 + validate()",
+          "session_id": "opencode:ses_120378f9fffewvnvewKnF5Yovq",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-06-19T12:10:03.429Z",
+          "started_at": "2026-06-19T12:09:37.067Z",
+          "status": "completed",
+          "ended_at": "2026-06-19T12:10:03.429Z",
+          "elapsed_ms": 26362
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "新增 ReplayTelemetrySource — 实现 TelemetrySource trait",
+          "session_id": "opencode:ses_12035f24affeaNc9r8owI6U6lv",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-06-19T12:14:35.315Z",
+          "started_at": "2026-06-19T12:14:01.622Z",
+          "status": "completed",
+          "ended_at": "2026-06-19T12:14:35.315Z",
+          "elapsed_ms": 33693
+        },
+        "todo:4": {
+          "task_key": "todo:4",
+          "task_label": "4",
+          "task_title": "新增 run_replay_loop 函数 — 无文件写入的回放循环",
+          "session_id": "opencode:ses_12031c3c9ffeZWS5pP6fDUiBRb",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-06-19T12:19:01.027Z",
+          "started_at": "2026-06-19T12:18:36.243Z",
+          "status": "completed",
+          "ended_at": "2026-06-19T12:19:01.027Z",
+          "elapsed_ms": 24784
+        },
+        "todo:5": {
+          "task_key": "todo:5",
+          "task_label": "5",
+          "task_title": "新增 RecordingController::start_replay() + start_replay_with_latest_dashboard() + 模块导出",
+          "session_id": "opencode:ses_1202da932ffecvZ7Tu3549D9J4",
+          "agent": "Sisyphus-Junior",
+          "started_at": "2026-06-19T12:26:04.060Z",
+          "status": "completed",
+          "updated_at": "2026-06-19T12:28:36.461Z",
+          "ended_at": "2026-06-19T12:28:36.461Z",
+          "elapsed_ms": 152401
+        },
+        "final-wave:f1": {
+          "task_key": "final-wave:f1",
+          "task_label": "F1",
+          "task_title": "**Plan Compliance Audit** — `oracle`",
+          "session_id": "opencode:ses_120251f0dffeib5UComSlaS62f",
+          "agent": "oracle",
+          "updated_at": "2026-06-19T12:31:01.108Z",
+          "started_at": "2026-06-19T12:30:54.809Z",
+          "status": "completed",
+          "ended_at": "2026-06-19T12:31:01.108Z",
+          "elapsed_ms": 6299
+        },
+        "final-wave:f2": {
+          "task_key": "final-wave:f2",
+          "task_label": "F2",
+          "task_title": "**Code Quality Review** — `unspecified-high`",
+          "session_id": "opencode:ses_12022eea3ffetPUbU5XjrB6U5D",
+          "agent": "general",
+          "updated_at": "2026-06-19T12:32:43.818Z",
+          "started_at": "2026-06-19T12:32:38.045Z",
+          "status": "completed",
+          "ended_at": "2026-06-19T12:32:43.818Z",
+          "elapsed_ms": 5773
+        },
+        "final-wave:f3": {
+          "task_key": "final-wave:f3",
+          "task_label": "F3",
+          "task_title": "**Real Manual QA** — `unspecified-high`",
+          "session_id": "opencode:ses_120210846ffefo26pBGyVpd0hs",
+          "agent": "general",
+          "updated_at": "2026-06-19T12:39:04.536Z",
+          "started_at": "2026-06-19T12:38:59.003Z",
+          "status": "completed",
+          "ended_at": "2026-06-19T12:39:04.536Z",
+          "elapsed_ms": 5533
+        },
+        "final-wave:f4": {
+          "task_key": "final-wave:f4",
+          "task_label": "F4",
+          "task_title": "**Scope Fidelity Check** — `deep`",
+          "session_id": "opencode:ses_1201b8d7affejyeCN2VgdOIwCy",
+          "agent": "general",
+          "updated_at": "2026-06-19T12:42:56.994Z",
+          "started_at": "2026-06-19T12:42:50.003Z",
+          "status": "completed",
+          "ended_at": "2026-06-19T12:42:56.994Z",
+          "elapsed_ms": 6991
+        }
+      },
+      "ended_at": "2026-06-19T12:43:06.073Z",
+      "elapsed_ms": 2249105
+    }
+  },
+  "active_plan": "D:\\WorkSpaces\\VibeCoding\\racing_team\\module_live_telemetry\\.omo\\plans\\replay-mock-telemetry.md",
+  "started_at": "2026-06-19T12:05:36.968Z",
+  "status": "completed",
+  "updated_at": "2026-06-19T12:43:06.073Z",
+  "session_ids": [
+    "opencode:ses_12059e5f3ffe98hecSFtOgN2A8"
+  ],
+  "session_origins": {
+    "opencode:ses_12059e5f3ffe98hecSFtOgN2A8": "direct"
+  },
+  "plan_name": "replay-mock-telemetry",
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "新增 StopReason::FramesExhausted + RecordingStatus::ReplayStarted 枚举变体",
+      "session_id": "opencode:ses_12039a13cffeUmasrfVccX1FM9",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-06-19T12:08:23.567Z",
+      "started_at": "2026-06-19T12:07:24.160Z",
+      "status": "completed",
+      "ended_at": "2026-06-19T12:08:23.567Z",
+      "elapsed_ms": 59407
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "新增 ReplayRequest 类型 + validate()",
+      "session_id": "opencode:ses_120378f9fffewvnvewKnF5Yovq",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-06-19T12:10:03.429Z",
+      "started_at": "2026-06-19T12:09:37.067Z",
+      "status": "completed",
+      "ended_at": "2026-06-19T12:10:03.429Z",
+      "elapsed_ms": 26362
+    },
+    "todo:3": {
+      "task_key": "todo:3",
+      "task_label": "3",
+      "task_title": "新增 ReplayTelemetrySource — 实现 TelemetrySource trait",
+      "session_id": "opencode:ses_12035f24affeaNc9r8owI6U6lv",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-06-19T12:14:35.315Z",
+      "started_at": "2026-06-19T12:14:01.622Z",
+      "status": "completed",
+      "ended_at": "2026-06-19T12:14:35.315Z",
+      "elapsed_ms": 33693
+    },
+    "todo:4": {
+      "task_key": "todo:4",
+      "task_label": "4",
+      "task_title": "新增 run_replay_loop 函数 — 无文件写入的回放循环",
+      "session_id": "opencode:ses_12031c3c9ffeZWS5pP6fDUiBRb",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-06-19T12:19:01.027Z",
+      "started_at": "2026-06-19T12:18:36.243Z",
+      "status": "completed",
+      "ended_at": "2026-06-19T12:19:01.027Z",
+      "elapsed_ms": 24784
+    },
+    "todo:5": {
+      "task_key": "todo:5",
+      "task_label": "5",
+      "task_title": "新增 RecordingController::start_replay() + start_replay_with_latest_dashboard() + 模块导出",
+      "session_id": "opencode:ses_1202da932ffecvZ7Tu3549D9J4",
+      "agent": "Sisyphus-Junior",
+      "started_at": "2026-06-19T12:26:04.060Z",
+      "status": "completed",
+      "updated_at": "2026-06-19T12:28:36.461Z",
+      "ended_at": "2026-06-19T12:28:36.461Z",
+      "elapsed_ms": 152401
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "**Plan Compliance Audit** — `oracle`",
+      "session_id": "opencode:ses_120251f0dffeib5UComSlaS62f",
+      "agent": "oracle",
+      "updated_at": "2026-06-19T12:31:01.108Z",
+      "started_at": "2026-06-19T12:30:54.809Z",
+      "status": "completed",
+      "ended_at": "2026-06-19T12:31:01.108Z",
+      "elapsed_ms": 6299
+    },
+    "final-wave:f2": {
+      "task_key": "final-wave:f2",
+      "task_label": "F2",
+      "task_title": "**Code Quality Review** — `unspecified-high`",
+      "session_id": "opencode:ses_12022eea3ffetPUbU5XjrB6U5D",
+      "agent": "general",
+      "updated_at": "2026-06-19T12:32:43.818Z",
+      "started_at": "2026-06-19T12:32:38.045Z",
+      "status": "completed",
+      "ended_at": "2026-06-19T12:32:43.818Z",
+      "elapsed_ms": 5773
+    },
+    "final-wave:f3": {
+      "task_key": "final-wave:f3",
+      "task_label": "F3",
+      "task_title": "**Real Manual QA** — `unspecified-high`",
+      "session_id": "opencode:ses_120210846ffefo26pBGyVpd0hs",
+      "agent": "general",
+      "updated_at": "2026-06-19T12:39:04.536Z",
+      "started_at": "2026-06-19T12:38:59.003Z",
+      "status": "completed",
+      "ended_at": "2026-06-19T12:39:04.536Z",
+      "elapsed_ms": 5533
+    },
+    "final-wave:f4": {
+      "task_key": "final-wave:f4",
+      "task_label": "F4",
+      "task_title": "**Scope Fidelity Check** — `deep`",
+      "session_id": "opencode:ses_1201b8d7affejyeCN2VgdOIwCy",
+      "agent": "general",
+      "updated_at": "2026-06-19T12:42:56.994Z",
+      "started_at": "2026-06-19T12:42:50.003Z",
+      "status": "completed",
+      "ended_at": "2026-06-19T12:42:56.994Z",
+      "elapsed_ms": 6991
+    }
+  },
+  "agent": "atlas",
+  "ended_at": "2026-06-19T12:43:06.073Z",
+  "elapsed_ms": 2249105
+}

@@ -75,8 +75,8 @@ impl TelemetryDistributor {
 mod tests {
     use super::*;
     use crate::types::{
-        CarStateSample, ControlSample, EnvironmentSample, MotionSample,
-        OtherCarsSample, PowertrainSample, SessionSample, TimingSample, TyreSample,
+        CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
+        PowertrainSample, SessionSample, TimingSample, TyreSample,
     };
 
     fn make_frame(tick: u64) -> TelemetryFrame {

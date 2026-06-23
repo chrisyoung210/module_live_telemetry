@@ -36,7 +36,11 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
 
     // ---- 顶层字段 ----
     items.push(RawItemEntry::new("sample_tick", "采样序号", None));
-    items.push(RawItemEntry::new("timestamp_ns", "时间戳（纳秒）", Some("ns")));
+    items.push(RawItemEntry::new(
+        "timestamp_ns",
+        "时间戳（纳秒）",
+        Some("ns"),
+    ));
 
     // ---- Controls（车辆操控）----
     let controls: &[(&str, &str, Option<&str>)] = &[
@@ -55,7 +59,9 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
     ];
     for (name, desc, unit) in controls {
         items.push(RawItemEntry::new(
-            format!("controls.{}", name), *desc, *unit,
+            format!("controls.{}", name),
+            *desc,
+            *unit,
         ));
     }
 
@@ -68,27 +74,29 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
         ("roll", "侧倾角", Some("rad")),
     ];
     for (name, desc, unit) in motion_scalars {
-        items.push(RawItemEntry::new(
-            format!("motion.{}", name), *desc, *unit,
-        ));
+        items.push(RawItemEntry::new(format!("motion.{}", name), *desc, *unit));
     }
     // 速度数组
     for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
         items.push(RawItemEntry::new(
             format!("motion.velocity[{}]", i),
-            format!("世界坐标系速度{}轴分量", axis), Some("m/s"),
+            format!("世界坐标系速度{}轴分量", axis),
+            Some("m/s"),
         ));
         items.push(RawItemEntry::new(
             format!("motion.acc_g[{}]", i),
-            format!("加速度{}轴分量（G力）", axis), Some("G"),
+            format!("加速度{}轴分量（G力）", axis),
+            Some("G"),
         ));
         items.push(RawItemEntry::new(
             format!("motion.local_velocity[{}]", i),
-            format!("车辆局部坐标系速度{}轴分量", axis), Some("m/s"),
+            format!("车辆局部坐标系速度{}轴分量", axis),
+            Some("m/s"),
         ));
         items.push(RawItemEntry::new(
             format!("motion.local_angular_vel[{}]", i),
-            format!("车辆局部坐标系角速度{}轴分量", axis), Some("rad/s"),
+            format!("车辆局部坐标系角速度{}轴分量", axis),
+            Some("rad/s"),
         ));
     }
 
@@ -101,9 +109,7 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
         ("rear_brake_compound", "后刹车片材质类型", None),
     ];
     for (name, desc, unit) in tyres_scalars {
-        items.push(RawItemEntry::new(
-            format!("tyres.{}", name), *desc, *unit,
-        ));
+        items.push(RawItemEntry::new(format!("tyres.{}", name), *desc, *unit));
     }
     // 轮胎数组字段（FL/FR/RL/RR = 前左/前右/后左/后右）
     let tyre_corners: &[&str] = &["前左", "前右", "后左", "后右"];
@@ -143,8 +149,8 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
     }
     // Tyre 接触点数据（12 个元素 = 4 轮 x 3 轴）
     let contact12_labels: &[&str] = &[
-        "前左X", "前左Y", "前左Z", "前右X", "前右Y", "前右Z",
-        "后左X", "后左Y", "后左Z", "后右X", "后右Y", "后右Z",
+        "前左X", "前左Y", "前左Z", "前右X", "前右Y", "前右Z", "后左X", "后左Y", "后左Z", "后右X",
+        "后右Y", "后右Z",
     ];
     for (base_name, desc) in &[
         ("tyre_contact_point", "轮胎接地点坐标"),
@@ -189,7 +195,9 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
     ];
     for (name, desc, unit) in powertrain {
         items.push(RawItemEntry::new(
-            format!("powertrain.{}", name), *desc, *unit,
+            format!("powertrain.{}", name),
+            *desc,
+            *unit,
         ));
     }
 
@@ -197,7 +205,11 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
     let session: &[(&str, &str, Option<&str>)] = &[
         ("sample_tick", "采样序号", None),
         ("timestamp_ns", "时间戳（纳秒）", Some("ns")),
-        ("status", "游戏状态（0=Off，1=Replay，2=Live，3=Pause）", None),
+        (
+            "status",
+            "游戏状态（0=Off，1=Replay，2=Live，3=Pause）",
+            None,
+        ),
         ("session", "会话状态", None),
         ("session_index", "会话序号", None),
         ("completed_laps", "已完成圈数", None),
@@ -223,14 +235,16 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
         ("global_green", "全场绿旗（0/1）", None),
         ("global_chequered", "格子旗（0/1）", None),
         ("global_red", "全场红旗（0/1）", None),
-        ("gap_ahead_or_tail_value", "与前车差距（ms）或队列位置", Some("ms")),
+        (
+            "gap_ahead_or_tail_value",
+            "与前车差距（ms）或队列位置",
+            Some("ms"),
+        ),
         ("flag", "当前旗语类型", None),
         ("gap_behind", "与后车差距", Some("ms")),
     ];
     for (name, desc, unit) in session {
-        items.push(RawItemEntry::new(
-            format!("session.{}", name), *desc, *unit,
-        ));
+        items.push(RawItemEntry::new(format!("session.{}", name), *desc, *unit));
     }
 
     // ---- Timing（计时数据）----
@@ -252,9 +266,7 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
         ("observed_slot_before_i_split", "分段前观察槽位", None),
     ];
     for (name, desc, unit) in timing {
-        items.push(RawItemEntry::new(
-            format!("timing.{}", name), *desc, *unit,
-        ));
+        items.push(RawItemEntry::new(format!("timing.{}", name), *desc, *unit));
     }
 
     // ---- CarState（车辆状态）----
@@ -272,7 +284,11 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
         ("flashing_lights", "闪烁灯状态", None),
         ("lights_stage", "灯光档位", None),
         ("wiper_lv", "雨刮档位", None),
-        ("driver_stint_total_time_left", "车手剩余总驾驶时间", Some("s")),
+        (
+            "driver_stint_total_time_left",
+            "车手剩余总驾驶时间",
+            Some("s"),
+        ),
         ("driver_stint_time_left", "车手当前阶段剩余时间", Some("s")),
         ("rain_tyres", "是否使用雨胎（0/1）", None),
         ("current_tyre_set", "当前轮胎组编号", None),
@@ -300,7 +316,9 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
     ];
     for (name, desc, unit) in car_state_scalars {
         items.push(RawItemEntry::new(
-            format!("car_state.{}", name), *desc, *unit,
+            format!("car_state.{}", name),
+            *desc,
+            *unit,
         ));
     }
     // 车辆损伤数组（前/后/左/右/中）
@@ -308,7 +326,8 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
     for (i, label) in damage_labels.iter().enumerate() {
         items.push(RawItemEntry::new(
             format!("car_state.car_damage[{}]", i),
-            format!("车辆损伤（{}）", label), None,
+            format!("车辆损伤（{}）", label),
+            None,
         ));
     }
     // 底盘高度数组（前/后）
@@ -316,14 +335,16 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
     for (i, label) in ride_labels.iter().enumerate() {
         items.push(RawItemEntry::new(
             format!("car_state.ride_height[{}]", i),
-            format!("底盘高度（{}）", label), Some("mm"),
+            format!("底盘高度（{}）", label),
+            Some("mm"),
         ));
     }
     // MFD胎压数组（FL/FR/RL/RR）
     for (i, corner) in tyre_corners.iter().enumerate() {
         items.push(RawItemEntry::new(
             format!("car_state.mfd_tyre_pressure[{}]", i),
-            format!("MFD显示胎压（{}）", corner), Some("psi"),
+            format!("MFD显示胎压（{}）", corner),
+            Some("psi"),
         ));
     }
 
@@ -343,7 +364,9 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
     ];
     for (name, desc, unit) in environment {
         items.push(RawItemEntry::new(
-            format!("environment.{}", name), *desc, *unit,
+            format!("environment.{}", name),
+            *desc,
+            *unit,
         ));
     }
 
@@ -356,7 +379,9 @@ pub fn all_raw_items() -> Vec<RawItemEntry> {
     ];
     for (name, desc, unit) in other_cars {
         items.push(RawItemEntry::new(
-            format!("other_cars.{}", name), *desc, *unit,
+            format!("other_cars.{}", name),
+            *desc,
+            *unit,
         ));
     }
 

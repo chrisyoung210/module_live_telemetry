@@ -36,13 +36,31 @@ fn test_infrastructure_works() {
     for (i, f) in frames.iter().enumerate() {
         assert!(f.controls.speed_kmh > 0.0, "frame[{i}].speed_kmh populated");
         assert!(f.motion.velocity[0] >= 0.0, "frame[{i}].velocity populated");
-        assert!(f.tyres.wheel_load[0] > 1000.0, "frame[{i}].wheel_load populated");
-        assert!(f.powertrain.turbo_boost > 1.0, "frame[{i}].turbo_boost populated");
+        assert!(
+            f.tyres.wheel_load[0] > 1000.0,
+            "frame[{i}].wheel_load populated"
+        );
+        assert!(
+            f.powertrain.turbo_boost > 1.0,
+            "frame[{i}].turbo_boost populated"
+        );
         assert_eq!(f.session.status, 2, "frame[{i}].status");
-        assert!(f.timing.i_current_time >= 0, "frame[{i}].i_current_time populated");
-        assert!(f.car_state.cg_height > 0.3, "frame[{i}].cg_height populated");
-        assert!(f.environment.air_temp > 20.0, "frame[{i}].air_temp populated");
-        assert!(f.other_cars.active_cars > 0, "frame[{i}].active_cars populated");
+        assert!(
+            f.timing.i_current_time >= 0,
+            "frame[{i}].i_current_time populated"
+        );
+        assert!(
+            f.car_state.cg_height > 0.3,
+            "frame[{i}].cg_height populated"
+        );
+        assert!(
+            f.environment.air_temp > 20.0,
+            "frame[{i}].air_temp populated"
+        );
+        assert!(
+            f.other_cars.active_cars > 0,
+            "frame[{i}].active_cars populated"
+        );
     }
 
     // --- lap boundaries ---
@@ -50,13 +68,29 @@ fn test_infrastructure_works() {
     let (_meta, frames) = make_test_session(3, fpl as u64);
     // Lap 1 → ticks 0..4, completed_laps = 0
     assert_eq!(frames[0].session.completed_laps, 0, "first frame lap 1");
-    assert_eq!(frames[fpl - 1].session.completed_laps, 0, "last frame lap 1");
+    assert_eq!(
+        frames[fpl - 1].session.completed_laps,
+        0,
+        "last frame lap 1"
+    );
     // Lap 2 → ticks 5..9, completed_laps = 1
     assert_eq!(frames[fpl].session.completed_laps, 1, "first frame lap 2");
-    assert_eq!(frames[2 * fpl - 1].session.completed_laps, 1, "last frame lap 2");
+    assert_eq!(
+        frames[2 * fpl - 1].session.completed_laps,
+        1,
+        "last frame lap 2"
+    );
     // Lap 3 → ticks 10..14, completed_laps = 2
-    assert_eq!(frames[2 * fpl].session.completed_laps, 2, "first frame lap 3");
-    assert_eq!(frames[3 * fpl - 1].session.completed_laps, 2, "last frame lap 3");
+    assert_eq!(
+        frames[2 * fpl].session.completed_laps,
+        2,
+        "first frame lap 3"
+    );
+    assert_eq!(
+        frames[3 * fpl - 1].session.completed_laps,
+        2,
+        "last frame lap 3"
+    );
 
     // --- metadata consistency ---
     let metadata = make_test_metadata("test_track", "test_car");
@@ -103,13 +137,13 @@ fn test_infrastructure_works() {
 
 #[cfg(feature = "v2_writer")]
 mod v2_tests {
-    use super::*;
     use super::test_data::make_test_frame;
+    use super::*;
     use module_live_telemetry::format_v2::GroupId;
-    use module_live_telemetry::writer::LiveTelemetryConfig;
-    use module_live_telemetry::{SessionMetadata, TelemetryFrame};
     use module_live_telemetry::reader_v2::BinaryTelemetryReaderV2;
+    use module_live_telemetry::writer::LiveTelemetryConfig;
     use module_live_telemetry::writer_v2::BinaryTelemetryWriterV2;
+    use module_live_telemetry::{SessionMetadata, TelemetryFrame};
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -165,70 +199,202 @@ mod v2_tests {
         assert_eq!(a.timestamp_ns, b.timestamp_ns, "frame[{idx}].timestamp_ns");
 
         // Controls (DriverInputs group)
-        assert_eq!(a.controls.speed_kmh, b.controls.speed_kmh, "frame[{idx}].controls.speed_kmh");
+        assert_eq!(
+            a.controls.speed_kmh, b.controls.speed_kmh,
+            "frame[{idx}].controls.speed_kmh"
+        );
         assert_eq!(a.controls.gas, b.controls.gas, "frame[{idx}].controls.gas");
-        assert_eq!(a.controls.brake, b.controls.brake, "frame[{idx}].controls.brake");
-        assert_eq!(a.controls.clutch, b.controls.clutch, "frame[{idx}].controls.clutch");
-        assert_eq!(a.controls.steer_angle, b.controls.steer_angle, "frame[{idx}].controls.steer_angle");
-        assert_eq!(a.controls.gear, b.controls.gear, "frame[{idx}].controls.gear");
-        assert_eq!(a.controls.rpms, b.controls.rpms, "frame[{idx}].controls.rpms");
-        assert_eq!(a.controls.fuel, b.controls.fuel, "frame[{idx}].controls.fuel");
+        assert_eq!(
+            a.controls.brake, b.controls.brake,
+            "frame[{idx}].controls.brake"
+        );
+        assert_eq!(
+            a.controls.clutch, b.controls.clutch,
+            "frame[{idx}].controls.clutch"
+        );
+        assert_eq!(
+            a.controls.steer_angle, b.controls.steer_angle,
+            "frame[{idx}].controls.steer_angle"
+        );
+        assert_eq!(
+            a.controls.gear, b.controls.gear,
+            "frame[{idx}].controls.gear"
+        );
+        assert_eq!(
+            a.controls.rpms, b.controls.rpms,
+            "frame[{idx}].controls.rpms"
+        );
+        assert_eq!(
+            a.controls.fuel, b.controls.fuel,
+            "frame[{idx}].controls.fuel"
+        );
 
         // Motion (VehicleDynamics group)
-        assert_eq!(a.motion.velocity, b.motion.velocity, "frame[{idx}].motion.velocity");
+        assert_eq!(
+            a.motion.velocity, b.motion.velocity,
+            "frame[{idx}].motion.velocity"
+        );
         assert_eq!(a.motion.acc_g, b.motion.acc_g, "frame[{idx}].motion.acc_g");
-        assert_eq!(a.motion.heading, b.motion.heading, "frame[{idx}].motion.heading");
+        assert_eq!(
+            a.motion.heading, b.motion.heading,
+            "frame[{idx}].motion.heading"
+        );
         assert_eq!(a.motion.pitch, b.motion.pitch, "frame[{idx}].motion.pitch");
         assert_eq!(a.motion.roll, b.motion.roll, "frame[{idx}].motion.roll");
 
         // Tyres (Tyres group)
-        assert_eq!(a.tyres.wheel_slip, b.tyres.wheel_slip, "frame[{idx}].tyres.wheel_slip");
-        assert_eq!(a.tyres.wheel_load, b.tyres.wheel_load, "frame[{idx}].tyres.wheel_load");
-        assert_eq!(a.tyres.wheels_pressure, b.tyres.wheels_pressure, "frame[{idx}].tyres.wheels_pressure");
-        assert_eq!(a.tyres.tyre_wear, b.tyres.tyre_wear, "frame[{idx}].tyres.tyre_wear");
-        assert_eq!(a.tyres.tyre_core_temperature, b.tyres.tyre_core_temperature, "frame[{idx}].tyres.tyre_core_temperature");
-        assert_eq!(a.tyres.brake_temp, b.tyres.brake_temp, "frame[{idx}].tyres.brake_temp");
-        assert_eq!(a.tyres.tyre_temp, b.tyres.tyre_temp, "frame[{idx}].tyres.tyre_temp");
+        assert_eq!(
+            a.tyres.wheel_slip, b.tyres.wheel_slip,
+            "frame[{idx}].tyres.wheel_slip"
+        );
+        assert_eq!(
+            a.tyres.wheel_load, b.tyres.wheel_load,
+            "frame[{idx}].tyres.wheel_load"
+        );
+        assert_eq!(
+            a.tyres.wheels_pressure, b.tyres.wheels_pressure,
+            "frame[{idx}].tyres.wheels_pressure"
+        );
+        assert_eq!(
+            a.tyres.tyre_wear, b.tyres.tyre_wear,
+            "frame[{idx}].tyres.tyre_wear"
+        );
+        assert_eq!(
+            a.tyres.tyre_core_temperature, b.tyres.tyre_core_temperature,
+            "frame[{idx}].tyres.tyre_core_temperature"
+        );
+        assert_eq!(
+            a.tyres.brake_temp, b.tyres.brake_temp,
+            "frame[{idx}].tyres.brake_temp"
+        );
+        assert_eq!(
+            a.tyres.tyre_temp, b.tyres.tyre_temp,
+            "frame[{idx}].tyres.tyre_temp"
+        );
 
         // Powertrain (DriverInputs group)
-        assert_eq!(a.powertrain.turbo_boost, b.powertrain.turbo_boost, "frame[{idx}].powertrain.turbo_boost");
-        assert_eq!(a.powertrain.kers_charge, b.powertrain.kers_charge, "frame[{idx}].powertrain.kers_charge");
-        assert_eq!(a.powertrain.drs, b.powertrain.drs, "frame[{idx}].powertrain.drs");
-        assert_eq!(a.powertrain.engine_brake, b.powertrain.engine_brake, "frame[{idx}].powertrain.engine_brake");
-        assert_eq!(a.powertrain.water_temp, b.powertrain.water_temp, "frame[{idx}].powertrain.water_temp");
+        assert_eq!(
+            a.powertrain.turbo_boost, b.powertrain.turbo_boost,
+            "frame[{idx}].powertrain.turbo_boost"
+        );
+        assert_eq!(
+            a.powertrain.kers_charge, b.powertrain.kers_charge,
+            "frame[{idx}].powertrain.kers_charge"
+        );
+        assert_eq!(
+            a.powertrain.drs, b.powertrain.drs,
+            "frame[{idx}].powertrain.drs"
+        );
+        assert_eq!(
+            a.powertrain.engine_brake, b.powertrain.engine_brake,
+            "frame[{idx}].powertrain.engine_brake"
+        );
+        assert_eq!(
+            a.powertrain.water_temp, b.powertrain.water_temp,
+            "frame[{idx}].powertrain.water_temp"
+        );
 
         // Session — timing-related fields go to Timing group, status fields to Environment
-        assert_eq!(a.session.completed_laps, b.session.completed_laps, "frame[{idx}].session.completed_laps");
-        assert_eq!(a.session.position, b.session.position, "frame[{idx}].session.position");
-        assert_eq!(a.session.is_in_pit, b.session.is_in_pit, "frame[{idx}].session.is_in_pit");
-        assert_eq!(a.session.status, b.session.status, "frame[{idx}].session.status");
-        assert_eq!(a.session.session_time_left, b.session.session_time_left, "frame[{idx}].session.session_time_left");
+        assert_eq!(
+            a.session.completed_laps, b.session.completed_laps,
+            "frame[{idx}].session.completed_laps"
+        );
+        assert_eq!(
+            a.session.position, b.session.position,
+            "frame[{idx}].session.position"
+        );
+        assert_eq!(
+            a.session.is_in_pit, b.session.is_in_pit,
+            "frame[{idx}].session.is_in_pit"
+        );
+        assert_eq!(
+            a.session.status, b.session.status,
+            "frame[{idx}].session.status"
+        );
+        assert_eq!(
+            a.session.session_time_left, b.session.session_time_left,
+            "frame[{idx}].session.session_time_left"
+        );
 
         // Timing (Timing group)
-        assert_eq!(a.timing.i_current_time, b.timing.i_current_time, "frame[{idx}].timing.i_current_time");
-        assert_eq!(a.timing.i_best_time, b.timing.i_best_time, "frame[{idx}].timing.i_best_time");
-        assert_eq!(a.timing.i_last_time, b.timing.i_last_time, "frame[{idx}].timing.i_last_time");
-        assert_eq!(a.timing.i_delta_lap_time, b.timing.i_delta_lap_time, "frame[{idx}].timing.i_delta_lap_time");
-        assert_eq!(a.timing.i_estimated_lap_time, b.timing.i_estimated_lap_time, "frame[{idx}].timing.i_estimated_lap_time");
-        assert_eq!(a.timing.last_sector_time, b.timing.last_sector_time, "frame[{idx}].timing.last_sector_time");
+        assert_eq!(
+            a.timing.i_current_time, b.timing.i_current_time,
+            "frame[{idx}].timing.i_current_time"
+        );
+        assert_eq!(
+            a.timing.i_best_time, b.timing.i_best_time,
+            "frame[{idx}].timing.i_best_time"
+        );
+        assert_eq!(
+            a.timing.i_last_time, b.timing.i_last_time,
+            "frame[{idx}].timing.i_last_time"
+        );
+        assert_eq!(
+            a.timing.i_delta_lap_time, b.timing.i_delta_lap_time,
+            "frame[{idx}].timing.i_delta_lap_time"
+        );
+        assert_eq!(
+            a.timing.i_estimated_lap_time, b.timing.i_estimated_lap_time,
+            "frame[{idx}].timing.i_estimated_lap_time"
+        );
+        assert_eq!(
+            a.timing.last_sector_time, b.timing.last_sector_time,
+            "frame[{idx}].timing.last_sector_time"
+        );
 
         // CarState (ColdStorage group)
-        assert_eq!(a.car_state.cg_height, b.car_state.cg_height, "frame[{idx}].car_state.cg_height");
-        assert_eq!(a.car_state.brake_bias, b.car_state.brake_bias, "frame[{idx}].car_state.brake_bias");
-        assert_eq!(a.car_state.tc_level, b.car_state.tc_level, "frame[{idx}].car_state.tc_level");
-        assert_eq!(a.car_state.abs_level, b.car_state.abs_level, "frame[{idx}].car_state.abs_level");
-        assert_eq!(a.car_state.engine_map, b.car_state.engine_map, "frame[{idx}].car_state.engine_map");
+        assert_eq!(
+            a.car_state.cg_height, b.car_state.cg_height,
+            "frame[{idx}].car_state.cg_height"
+        );
+        assert_eq!(
+            a.car_state.brake_bias, b.car_state.brake_bias,
+            "frame[{idx}].car_state.brake_bias"
+        );
+        assert_eq!(
+            a.car_state.tc_level, b.car_state.tc_level,
+            "frame[{idx}].car_state.tc_level"
+        );
+        assert_eq!(
+            a.car_state.abs_level, b.car_state.abs_level,
+            "frame[{idx}].car_state.abs_level"
+        );
+        assert_eq!(
+            a.car_state.engine_map, b.car_state.engine_map,
+            "frame[{idx}].car_state.engine_map"
+        );
 
         // Environment (Environment group)
-        assert_eq!(a.environment.air_density, b.environment.air_density, "frame[{idx}].environment.air_density");
-        assert_eq!(a.environment.air_temp, b.environment.air_temp, "frame[{idx}].environment.air_temp");
-        assert_eq!(a.environment.road_temp, b.environment.road_temp, "frame[{idx}].environment.road_temp");
-        assert_eq!(a.environment.wind_speed, b.environment.wind_speed, "frame[{idx}].environment.wind_speed");
-        assert_eq!(a.environment.surface_grip, b.environment.surface_grip, "frame[{idx}].environment.surface_grip");
+        assert_eq!(
+            a.environment.air_density, b.environment.air_density,
+            "frame[{idx}].environment.air_density"
+        );
+        assert_eq!(
+            a.environment.air_temp, b.environment.air_temp,
+            "frame[{idx}].environment.air_temp"
+        );
+        assert_eq!(
+            a.environment.road_temp, b.environment.road_temp,
+            "frame[{idx}].environment.road_temp"
+        );
+        assert_eq!(
+            a.environment.wind_speed, b.environment.wind_speed,
+            "frame[{idx}].environment.wind_speed"
+        );
+        assert_eq!(
+            a.environment.surface_grip, b.environment.surface_grip,
+            "frame[{idx}].environment.surface_grip"
+        );
 
         // OtherCars (ColdStorage group)
-        assert_eq!(a.other_cars.active_cars, b.other_cars.active_cars, "frame[{idx}].other_cars.active_cars");
-        assert_eq!(a.other_cars.player_car_id, b.other_cars.player_car_id, "frame[{idx}].other_cars.player_car_id");
+        assert_eq!(
+            a.other_cars.active_cars, b.other_cars.active_cars,
+            "frame[{idx}].other_cars.active_cars"
+        );
+        assert_eq!(
+            a.other_cars.player_car_id, b.other_cars.player_car_id,
+            "frame[{idx}].other_cars.player_car_id"
+        );
     }
 
     // =====================================================================
@@ -263,9 +429,14 @@ mod v2_tests {
         assert_eq!(reader.metadata().track_name, "test_track");
         assert_eq!(reader.metadata().car_model, "test_car");
 
-        let read_frames = reader.read_all_frames().expect("v2 reader: read_all_frames");
-        assert_eq!(read_frames.len(), original_frames.len(),
-            "frame count mismatch");
+        let read_frames = reader
+            .read_all_frames()
+            .expect("v2 reader: read_all_frames");
+        assert_eq!(
+            read_frames.len(),
+            original_frames.len(),
+            "frame count mismatch"
+        );
 
         // --- Field-by-field comparison ---
         for (i, (orig, read)) in original_frames.iter().zip(read_frames.iter()).enumerate() {
@@ -288,7 +459,10 @@ mod v2_tests {
         assert_eq!(frames.len(), 15);
 
         // --- Write ---
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
         let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
             .expect("v2 writer: create_file");
         for frame in &frames {
@@ -335,7 +509,10 @@ mod v2_tests {
         assert_eq!(frames.len(), 10);
 
         // --- Write ---
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
         let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
             .expect("v2 writer: create_file");
         for frame in &frames {
@@ -345,11 +522,9 @@ mod v2_tests {
 
         // --- Read only DriverInputs ---
         let reader = BinaryTelemetryReaderV2::open(&path).expect("v2 reader: open");
-        let result = reader.read_group_frames(
-            &[GroupId::DriverInputs],
-            None,
-            None,
-        ).expect("v2 reader: read_group_frames");
+        let result = reader
+            .read_group_frames(&[GroupId::DriverInputs], None, None)
+            .expect("v2 reader: read_group_frames");
 
         // Only one group should be present
         assert_eq!(result.len(), 1, "expected exactly 1 group in result");
@@ -406,7 +581,10 @@ mod v2_tests {
         assert_eq!(frames.len(), 15);
 
         // --- Write ---
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
         let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
             .expect("v2 writer: create_file");
         for frame in &frames {
@@ -416,10 +594,15 @@ mod v2_tests {
 
         // --- Read lap 2 only (1-based) ---
         let reader = BinaryTelemetryReaderV2::open(&path).expect("v2 reader: open");
-        let lap2_frames = reader.read_lap_frames(2).expect("v2 reader: read_lap_frames");
+        let lap2_frames = reader
+            .read_lap_frames(2)
+            .expect("v2 reader: read_lap_frames");
 
-        assert_eq!(lap2_frames.len(), fpl as usize,
-            "lap 2 should have exactly {fpl} frames");
+        assert_eq!(
+            lap2_frames.len(),
+            fpl as usize,
+            "lap 2 should have exactly {fpl} frames"
+        );
 
         // Verify every returned frame belongs to lap 2
         for (i, frame) in lap2_frames.iter().enumerate() {
@@ -463,7 +646,10 @@ mod v2_tests {
         assert_eq!(frames.len(), 10);
 
         // --- Write ---
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
         let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
             .expect("v2 writer: create_file");
         for frame in &frames {
@@ -473,32 +659,43 @@ mod v2_tests {
 
         // --- Read DriverInputs + Timing ---
         let reader = BinaryTelemetryReaderV2::open(&path).expect("v2 reader: open");
-        let result = reader.read_group_frames(
-            &[GroupId::DriverInputs, GroupId::Timing],
-            None,
-            None,
-        ).expect("v2 reader: read_group_frames");
+        let result = reader
+            .read_group_frames(&[GroupId::DriverInputs, GroupId::Timing], None, None)
+            .expect("v2 reader: read_group_frames");
 
         // Exactly 2 groups present
-        assert_eq!(result.len(), 2,
+        assert_eq!(
+            result.len(),
+            2,
             "expected exactly 2 groups (DriverInputs + Timing), got {}",
-            result.len());
+            result.len()
+        );
 
         // Both requested groups present
-        assert!(result.contains_key(&GroupId::DriverInputs),
-            "DriverInputs should be present");
-        assert!(result.contains_key(&GroupId::Timing),
-            "Timing should be present");
+        assert!(
+            result.contains_key(&GroupId::DriverInputs),
+            "DriverInputs should be present"
+        );
+        assert!(
+            result.contains_key(&GroupId::Timing),
+            "Timing should be present"
+        );
 
         // Tyres group must NOT be present
-        assert!(!result.contains_key(&GroupId::Tyres),
-            "Tyres should NOT be present in selective read");
+        assert!(
+            !result.contains_key(&GroupId::Tyres),
+            "Tyres should NOT be present in selective read"
+        );
         // VehicleDynamics should not be present either
-        assert!(!result.contains_key(&GroupId::VehicleDynamics),
-            "VehicleDynamics should NOT be present");
+        assert!(
+            !result.contains_key(&GroupId::VehicleDynamics),
+            "VehicleDynamics should NOT be present"
+        );
         // ColdStorage should not be present
-        assert!(!result.contains_key(&GroupId::ColdStorage),
-            "ColdStorage should NOT be present");
+        assert!(
+            !result.contains_key(&GroupId::ColdStorage),
+            "ColdStorage should NOT be present"
+        );
 
         // Verify column counts
         // DriverInputs = 30 columns (Controls 8 + Powertrain 22)
@@ -512,14 +709,18 @@ mod v2_tests {
         // (TYPE_BYTES columns have sub_count × row_count values, so we
         //  check that the length is divisible by 10 with at least 10 values)
         for (col_idx, col) in di_cols.iter().enumerate() {
-            assert!(col.len() >= 10 && col.len() % 10 == 0,
+            assert!(
+                col.len() >= 10 && col.len() % 10 == 0,
                 "DriverInputs column[{col_idx}] length {} should be ≥10 and divisible by 10",
-                col.len());
+                col.len()
+            );
         }
         for (col_idx, col) in timing_cols.iter().enumerate() {
-            assert!(col.len() >= 10 && col.len() % 10 == 0,
+            assert!(
+                col.len() >= 10 && col.len() % 10 == 0,
                 "Timing column[{col_idx}] length {} should be ≥10 and divisible by 10",
-                col.len());
+                col.len()
+            );
         }
     }
 
@@ -534,10 +735,15 @@ mod v2_tests {
         let path = tmp.file_path("ctrl.acctlm2");
 
         let (metadata, frames) = make_test_session(2, 5);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
@@ -552,7 +758,10 @@ mod v2_tests {
             assert_eq!(s.gas, f.controls.gas, "frame[{i}].gas");
             assert_eq!(s.brake, f.controls.brake, "frame[{i}].brake");
             assert_eq!(s.clutch, f.controls.clutch, "frame[{i}].clutch");
-            assert_eq!(s.steer_angle, f.controls.steer_angle, "frame[{i}].steer_angle");
+            assert_eq!(
+                s.steer_angle, f.controls.steer_angle,
+                "frame[{i}].steer_angle"
+            );
             assert_eq!(s.gear, f.controls.gear, "frame[{i}].gear");
             assert_eq!(s.rpms, f.controls.rpms, "frame[{i}].rpms");
             assert_eq!(s.fuel, f.controls.fuel, "frame[{i}].fuel");
@@ -566,10 +775,15 @@ mod v2_tests {
         let path = tmp.file_path("motion.acctlm2");
 
         let (metadata, frames) = make_test_session(2, 5);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
@@ -594,10 +808,15 @@ mod v2_tests {
         let path = tmp.file_path("tyres.acctlm2");
 
         let (metadata, frames) = make_test_session(2, 5);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
@@ -608,7 +827,10 @@ mod v2_tests {
         for (i, (s, f)) in samples.iter().zip(frames.iter()).enumerate() {
             assert_eq!(s.wheel_slip, f.tyres.wheel_slip, "frame[{i}].wheel_slip");
             assert_eq!(s.wheel_load, f.tyres.wheel_load, "frame[{i}].wheel_load");
-            assert_eq!(s.wheels_pressure, f.tyres.wheels_pressure, "frame[{i}].wheels_pressure");
+            assert_eq!(
+                s.wheels_pressure, f.tyres.wheels_pressure,
+                "frame[{i}].wheels_pressure"
+            );
             assert_eq!(s.tyre_wear, f.tyres.tyre_wear, "frame[{i}].tyre_wear");
             assert_eq!(s.tyre_temp, f.tyres.tyre_temp, "frame[{i}].tyre_temp");
             assert_eq!(s.brake_temp, f.tyres.brake_temp, "frame[{i}].brake_temp");
@@ -622,23 +844,42 @@ mod v2_tests {
         let path = tmp.file_path("ptrain.acctlm2");
 
         let (metadata, frames) = make_test_session(2, 5);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
-        let samples = reader.read_all_powertrain_v2().expect("read_all_powertrain_v2");
+        let samples = reader
+            .read_all_powertrain_v2()
+            .expect("read_all_powertrain_v2");
 
         assert_eq!(samples.len(), frames.len());
 
         for (i, (s, f)) in samples.iter().zip(frames.iter()).enumerate() {
-            assert_eq!(s.turbo_boost, f.powertrain.turbo_boost, "frame[{i}].turbo_boost");
-            assert_eq!(s.kers_charge, f.powertrain.kers_charge, "frame[{i}].kers_charge");
+            assert_eq!(
+                s.turbo_boost, f.powertrain.turbo_boost,
+                "frame[{i}].turbo_boost"
+            );
+            assert_eq!(
+                s.kers_charge, f.powertrain.kers_charge,
+                "frame[{i}].kers_charge"
+            );
             assert_eq!(s.drs, f.powertrain.drs, "frame[{i}].drs");
-            assert_eq!(s.engine_brake, f.powertrain.engine_brake, "frame[{i}].engine_brake");
-            assert_eq!(s.water_temp, f.powertrain.water_temp, "frame[{i}].water_temp");
+            assert_eq!(
+                s.engine_brake, f.powertrain.engine_brake,
+                "frame[{i}].engine_brake"
+            );
+            assert_eq!(
+                s.water_temp, f.powertrain.water_temp,
+                "frame[{i}].water_temp"
+            );
         }
     }
 
@@ -649,10 +890,15 @@ mod v2_tests {
         let path = tmp.file_path("sess.acctlm2");
 
         let (metadata, frames) = make_test_session(2, 5);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
@@ -661,12 +907,18 @@ mod v2_tests {
         assert_eq!(samples.len(), frames.len());
 
         for (i, (s, f)) in samples.iter().zip(frames.iter()).enumerate() {
-            assert_eq!(s.completed_laps, f.session.completed_laps, "frame[{i}].completed_laps");
+            assert_eq!(
+                s.completed_laps, f.session.completed_laps,
+                "frame[{i}].completed_laps"
+            );
             assert_eq!(s.position, f.session.position, "frame[{i}].position");
             assert_eq!(s.is_in_pit, f.session.is_in_pit, "frame[{i}].is_in_pit");
             assert_eq!(s.status, f.session.status, "frame[{i}].status");
             assert_eq!(s.session, f.session.session, "frame[{i}].session");
-            assert_eq!(s.global_yellow, f.session.global_yellow, "frame[{i}].global_yellow");
+            assert_eq!(
+                s.global_yellow, f.session.global_yellow,
+                "frame[{i}].global_yellow"
+            );
         }
     }
 
@@ -677,10 +929,15 @@ mod v2_tests {
         let path = tmp.file_path("timing.acctlm2");
 
         let (metadata, frames) = make_test_session(2, 5);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
@@ -689,11 +946,23 @@ mod v2_tests {
         assert_eq!(samples.len(), frames.len());
 
         for (i, (s, f)) in samples.iter().zip(frames.iter()).enumerate() {
-            assert_eq!(s.i_current_time, f.timing.i_current_time, "frame[{i}].i_current_time");
-            assert_eq!(s.i_last_time, f.timing.i_last_time, "frame[{i}].i_last_time");
-            assert_eq!(s.i_best_time, f.timing.i_best_time, "frame[{i}].i_best_time");
+            assert_eq!(
+                s.i_current_time, f.timing.i_current_time,
+                "frame[{i}].i_current_time"
+            );
+            assert_eq!(
+                s.i_last_time, f.timing.i_last_time,
+                "frame[{i}].i_last_time"
+            );
+            assert_eq!(
+                s.i_best_time, f.timing.i_best_time,
+                "frame[{i}].i_best_time"
+            );
             assert_eq!(s.i_split, f.timing.i_split, "frame[{i}].i_split");
-            assert_eq!(s.fuel_estimated_laps, f.timing.fuel_estimated_laps, "frame[{i}].fuel_estimated_laps");
+            assert_eq!(
+                s.fuel_estimated_laps, f.timing.fuel_estimated_laps,
+                "frame[{i}].fuel_estimated_laps"
+            );
         }
     }
 
@@ -704,22 +973,38 @@ mod v2_tests {
         let path = tmp.file_path("carstate.acctlm2");
 
         let (metadata, frames) = make_test_session(2, 5);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
-        let samples = reader.read_all_car_state_v2().expect("read_all_car_state_v2");
+        let samples = reader
+            .read_all_car_state_v2()
+            .expect("read_all_car_state_v2");
 
         assert_eq!(samples.len(), frames.len());
 
         for (i, (s, f)) in samples.iter().zip(frames.iter()).enumerate() {
-            assert_eq!(s.car_damage, f.car_state.car_damage, "frame[{i}].car_damage");
+            assert_eq!(
+                s.car_damage, f.car_state.car_damage,
+                "frame[{i}].car_damage"
+            );
             assert_eq!(s.cg_height, f.car_state.cg_height, "frame[{i}].cg_height");
-            assert_eq!(s.brake_bias, f.car_state.brake_bias, "frame[{i}].brake_bias");
-            assert_eq!(s.engine_map, f.car_state.engine_map, "frame[{i}].engine_map");
+            assert_eq!(
+                s.brake_bias, f.car_state.brake_bias,
+                "frame[{i}].brake_bias"
+            );
+            assert_eq!(
+                s.engine_map, f.car_state.engine_map,
+                "frame[{i}].engine_map"
+            );
         }
     }
 
@@ -730,22 +1015,35 @@ mod v2_tests {
         let path = tmp.file_path("env.acctlm2");
 
         let (metadata, frames) = make_test_session(2, 5);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
-        let samples = reader.read_all_environment_v2().expect("read_all_environment_v2");
+        let samples = reader
+            .read_all_environment_v2()
+            .expect("read_all_environment_v2");
 
         assert_eq!(samples.len(), frames.len());
 
         for (i, (s, f)) in samples.iter().zip(frames.iter()).enumerate() {
             assert_eq!(s.air_temp, f.environment.air_temp, "frame[{i}].air_temp");
             assert_eq!(s.road_temp, f.environment.road_temp, "frame[{i}].road_temp");
-            assert_eq!(s.wind_speed, f.environment.wind_speed, "frame[{i}].wind_speed");
-            assert_eq!(s.rain_intensity, f.environment.rain_intensity, "frame[{i}].rain_intensity");
+            assert_eq!(
+                s.wind_speed, f.environment.wind_speed,
+                "frame[{i}].wind_speed"
+            );
+            assert_eq!(
+                s.rain_intensity, f.environment.rain_intensity,
+                "frame[{i}].rain_intensity"
+            );
         }
     }
 
@@ -756,20 +1054,33 @@ mod v2_tests {
         let path = tmp.file_path("ocars.acctlm2");
 
         let (metadata, frames) = make_test_session(2, 5);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
-        let samples = reader.read_all_other_cars_v2().expect("read_all_other_cars_v2");
+        let samples = reader
+            .read_all_other_cars_v2()
+            .expect("read_all_other_cars_v2");
 
         assert_eq!(samples.len(), frames.len());
 
         for (i, (s, f)) in samples.iter().zip(frames.iter()).enumerate() {
-            assert_eq!(s.active_cars, f.other_cars.active_cars, "frame[{i}].active_cars");
-            assert_eq!(s.player_car_id, f.other_cars.player_car_id, "frame[{i}].player_car_id");
+            assert_eq!(
+                s.active_cars, f.other_cars.active_cars,
+                "frame[{i}].active_cars"
+            );
+            assert_eq!(
+                s.player_car_id, f.other_cars.player_car_id,
+                "frame[{i}].player_car_id"
+            );
         }
     }
 
@@ -786,17 +1097,23 @@ mod v2_tests {
         let path = tmp.file_path("itemkey_ctrl.acctlm2");
 
         let (metadata, frames) = make_test_session(2, 5);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
 
         let key = ItemKey::parse("raw:controls.speed_kmh").expect("parse key");
         // Read frames 0..4 (5 frames)
-        let values = reader.read_item_frames(&key, 0, 4)
+        let values = reader
+            .read_item_frames(&key, 0, 4)
             .expect("read_item_frames");
 
         assert_eq!(values.len(), 5, "should return 5 values for ticks 0..4");
@@ -819,16 +1136,22 @@ mod v2_tests {
         let path = tmp.file_path("itemkey_mot.acctlm2");
 
         let (metadata, frames) = make_test_session(1, 3);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
 
         let key = ItemKey::parse("raw:motion.heading").expect("parse key");
-        let values = reader.read_item_frames(&key, 0, 2)
+        let values = reader
+            .read_item_frames(&key, 0, 2)
             .expect("read_item_frames");
 
         assert_eq!(values.len(), 3, "should return 3 values");
@@ -851,10 +1174,15 @@ mod v2_tests {
         let path = tmp.file_path("itemkey_calc.acctlm2");
 
         let (metadata, frames) = make_test_session(1, 2);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
@@ -875,20 +1203,30 @@ mod v2_tests {
         let path = tmp.file_path("itemkey_tyre.acctlm2");
 
         let (metadata, frames) = make_test_session(1, 2);
-        let config = LiveTelemetryConfig { poll_hz: 120.0, chunk_rows: 1024 };
-        let mut writer = BinaryTelemetryWriterV2::create_file(&path, metadata, config)
-            .expect("create_file");
-        for f in &frames { writer.write_frame(f).expect("write_frame"); }
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&path, metadata, config).expect("create_file");
+        for f in &frames {
+            writer.write_frame(f).expect("write_frame");
+        }
         writer.finish().expect("finish");
 
         let reader = BinaryTelemetryReaderV2::open(&path).expect("open");
 
         let key = ItemKey::parse("raw:tyres.brake_temp").expect("parse key");
         // read all 2 frames, brake_temp has 4 sub-values per frame → 8 values
-        let values = reader.read_item_frames(&key, 0, 1)
+        let values = reader
+            .read_item_frames(&key, 0, 1)
             .expect("read_item_frames");
 
-        assert_eq!(values.len(), 8, "brake_temp: 2 frames × 4 wheels = 8 values");
+        assert_eq!(
+            values.len(),
+            8,
+            "brake_temp: 2 frames × 4 wheels = 8 values"
+        );
 
         // Verify first frame's brake_temp = arr4(200.0 + ...)
         for wheel in 0..4 {

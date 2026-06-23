@@ -5,8 +5,11 @@
 //! for testing without real ACC shared memory.
 
 use crate::error::{TelemetryError, TelemetryResult};
+use crate::reader::BinaryTelemetryReader;
 use crate::shmem::{AccGameStatus, AccSessionInfo, AccSharedMemoryReader};
+use crate::types::SessionMetadata;
 use crate::writer::TelemetryFrame;
+use std::collections::VecDeque;
 
 /// Abstract telemetry data source.
 ///
@@ -63,12 +66,12 @@ pub struct AccTelemetrySource {
 }
 
 impl AccTelemetrySource {
-    pub fn new(reader: AccSharedMemoryReader) -> Self {
+    pub(crate) fn new(reader: AccSharedMemoryReader) -> Self {
         Self { reader }
     }
 
     /// Attempt to open ACC shared memory.
-    pub fn open() -> TelemetryResult<Self> {
+    pub(crate) fn open() -> TelemetryResult<Self> {
         AccSharedMemoryReader::open().map(Self::new)
     }
 }
@@ -102,6 +105,96 @@ impl TelemetrySource for AccTelemetrySource {
         let phys = self.reader.read_raw_physics()?;
         let graph = self.reader.read_raw_graphics()?;
         let frame = crate::parse_raw_frame(sample_tick, timestamp_ns, &phys, &graph)?;
+        Ok(Some(frame))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ReplayTelemetrySource — replays frames from an acctlm2 file
+// ---------------------------------------------------------------------------
+
+/// Reads all frames from an acctlm2 telemetry file via `BinaryTelemetryReader`
+/// and replays them one by one via `TelemetrySource`.
+pub struct ReplayTelemetrySource {
+    frames: VecDeque<TelemetryFrame>,
+    #[allow(dead_code)]
+    metadata: SessionMetadata,
+    raw_static_bytes: Vec<u8>,
+    session_info: AccSessionInfo,
+}
+
+impl ReplayTelemetrySource {
+    /// Return the poll_hz stored in the session metadata.
+    pub(crate) fn poll_hz(&self) -> f64 {
+        self.metadata.poll_hz
+    }
+
+    /// Return a reference to the session metadata loaded from the file.
+    pub fn metadata(&self) -> &SessionMetadata {
+        &self.metadata
+    }
+
+    /// Open an acctlm2 file and load all frames into memory.
+    pub fn open(file_path: impl AsRef<std::path::Path>) -> TelemetryResult<Self> {
+        let reader = BinaryTelemetryReader::open(&file_path)?;
+        let frames: VecDeque<_> = reader.read_all_frames()?.into();
+        let metadata = reader.metadata().clone();
+        let raw_static_bytes = metadata.raw_static_bytes.clone();
+        let session_info = AccSessionInfo {
+            track_name: metadata.track_name.clone(),
+            car_model: metadata.car_model.clone(),
+        };
+        Ok(Self {
+            frames,
+            metadata,
+            raw_static_bytes,
+            session_info,
+        })
+    }
+}
+
+impl TelemetrySource for ReplayTelemetrySource {
+    fn status(&mut self) -> TelemetryResult<AccGameStatus> {
+        if self.frames.is_empty() {
+            Ok(AccGameStatus::Off)
+        } else {
+            Ok(AccGameStatus::Live)
+        }
+    }
+
+    fn session_info(&mut self) -> TelemetryResult<AccSessionInfo> {
+        Ok(self.session_info.clone())
+    }
+
+    fn read_static_bytes(&mut self) -> TelemetryResult<Vec<u8>> {
+        Ok(self.raw_static_bytes.clone())
+    }
+
+    fn read_telemetry_frame(
+        &mut self,
+        sample_tick: u64,
+        timestamp_ns: u64,
+    ) -> TelemetryResult<Option<TelemetryFrame>> {
+        let mut frame = match self.frames.pop_front() {
+            Some(f) => f,
+            None => return Ok(None),
+        };
+        frame.sample_tick = sample_tick;
+        frame.timestamp_ns = timestamp_ns;
+        Ok(Some(frame))
+    }
+
+    fn read_all_telemetry_frame(
+        &mut self,
+        sample_tick: u64,
+        timestamp_ns: u64,
+    ) -> TelemetryResult<Option<TelemetryFrame>> {
+        let mut frame = match self.frames.pop_front() {
+            Some(f) => f,
+            None => return Ok(None),
+        };
+        frame.sample_tick = sample_tick;
+        frame.timestamp_ns = timestamp_ns;
         Ok(Some(frame))
     }
 }
@@ -318,9 +411,10 @@ impl TelemetrySource for ScriptedTelemetrySource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shmem::ACC_STATUS_LIVE;
     use crate::types::{
-        CarStateSample, ControlSample, EnvironmentSample, MotionSample,
-        OtherCarsSample, PowertrainSample, SessionSample, TimingSample, TyreSample,
+        CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
+        PowertrainSample, SessionSample, TimingSample, TyreSample,
     };
 
     fn make_frame(seed: u64, speed: f32, status_val: i32) -> TelemetryFrame {
@@ -361,8 +455,7 @@ mod tests {
             ScriptedStep::new()
                 .with_status(AccGameStatus::Live)
                 .with_frame(make_frame(1, 20.0, 2)),
-            ScriptedStep::new()
-                .with_status(AccGameStatus::Off),
+            ScriptedStep::new().with_status(AccGameStatus::Off),
         ];
         let mut src = ScriptedTelemetrySource::new(steps);
 
@@ -429,8 +522,7 @@ mod tests {
             ScriptedStep::new()
                 .with_status(AccGameStatus::Live)
                 .with_frame(make_frame(0, 100.0, 2)),
-            ScriptedStep::new()
-                .with_status(AccGameStatus::Off),
+            ScriptedStep::new().with_status(AccGameStatus::Off),
             ScriptedStep::new()
                 .with_status(AccGameStatus::Off)
                 .with_frame(make_frame(2, 200.0, 0)), // frame with Off status
@@ -478,5 +570,176 @@ mod tests {
             let result = AccTelemetrySource::open();
             assert!(result.is_err());
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // ReplayTelemetrySource tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: create a test session metadata for replay tests.
+    fn replay_test_metadata() -> SessionMetadata {
+        let mut meta = SessionMetadata::new("monza", "porsche_911_gt3", 120.0);
+        meta.raw_static_bytes = b"fake-static-page".to_vec();
+        meta
+    }
+
+    /// Helper: create a single test frame with unique tick.
+    fn replay_frame(idx: u64) -> TelemetryFrame {
+        TelemetryFrame {
+            sample_tick: idx,
+            timestamp_ns: idx * 8_333_333,
+            controls: ControlSample {
+                sample_tick: idx,
+                timestamp_ns: idx * 8_333_333,
+                physics_packet_id: idx as i32,
+                speed_kmh: 50.0 + idx as f32 * 10.0,
+                ..ControlSample::default()
+            },
+            session: SessionSample {
+                status: ACC_STATUS_LIVE,
+                ..SessionSample::default()
+            },
+            ..make_frame(idx, 0.0, 0)
+        }
+    }
+
+    #[cfg(feature = "v2_writer")]
+    #[test]
+    fn test_replay_source_open_and_read_all_frames() {
+        use crate::writer_v2::BinaryTelemetryWriterV2;
+        use crate::writer::LiveTelemetryConfig;
+        use std::sync::Arc;
+
+        let tmp = std::env::temp_dir().join(format!("replay_test_{}.acctlm2", std::process::id()));
+        let _ = std::fs::remove_file(&tmp); // clean slate
+
+        let metadata = replay_test_metadata();
+        let config = LiveTelemetryConfig {
+            poll_hz: 120.0,
+            chunk_rows: 1024,
+        };
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&tmp, metadata.clone(), config)
+                .expect("create_file");
+
+        let frames_in: Vec<_> = (0u64..3).map(replay_frame).collect();
+        for f in &frames_in {
+            writer.write_frame(&Arc::new(f.clone())).expect("write_frame");
+        }
+        writer.finish().expect("finish");
+
+        // Open replay source
+        let mut source = ReplayTelemetrySource::open(&tmp).expect("open replay source");
+
+        // Verify status is Live while frames remain
+        assert_eq!(source.status().unwrap(), AccGameStatus::Live);
+
+        // Verify session_info matches
+        let info = source.session_info().unwrap();
+        assert_eq!(info.track_name, "monza");
+        assert_eq!(info.car_model, "porsche_911_gt3");
+
+        // Verify read_static_bytes returns something (format-dependent round-trip)
+        let _static_bytes = source.read_static_bytes().unwrap();
+
+        // Read all frames — verify count and that sample_tick/timestamp_ns are overwritten
+        for i in 0u64..3 {
+            let frame = source
+                .read_telemetry_frame(100 + i, 200 + i)
+                .expect("read frame")
+                .unwrap_or_else(|| panic!("expected frame {i}"));
+            assert_eq!(frame.sample_tick, 100 + i);
+            assert_eq!(frame.timestamp_ns, 200 + i);
+            assert!((frame.controls.speed_kmh - (50.0 + i as f32 * 10.0)).abs() < 0.01);
+        }
+
+        // 4th read returns None
+        assert!(source.read_telemetry_frame(999, 999).unwrap().is_none());
+
+        // Status is now Off
+        assert_eq!(source.status().unwrap(), AccGameStatus::Off);
+
+        // Cleanup
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[cfg(feature = "v2_writer")]
+    #[test]
+    fn test_replay_source_read_all_same_as_read_one() {
+        use crate::writer_v2::BinaryTelemetryWriterV2;
+        use crate::writer::LiveTelemetryConfig;
+        use std::sync::Arc;
+
+        let tmp =
+            std::env::temp_dir().join(format!("replay_all_test_{}.acctlm2", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        let metadata = replay_test_metadata();
+        let config = LiveTelemetryConfig::default();
+        let mut writer =
+            BinaryTelemetryWriterV2::create_file(&tmp, metadata, config).expect("create_file");
+
+        let frames_in: Vec<_> = (0u64..5).map(replay_frame).collect();
+        for f in &frames_in {
+            writer.write_frame(&Arc::new(f.clone())).expect("write_frame");
+        }
+        writer.finish().expect("finish");
+
+        let mut source = ReplayTelemetrySource::open(&tmp).expect("open");
+
+        // read_all_telemetry_frame should behave identically to read_telemetry_frame
+        for i in 0u64..5 {
+            let frame = source
+                .read_all_telemetry_frame(10 + i, 20 + i)
+                .expect("read_all frame")
+                .unwrap_or_else(|| panic!("expected frame {i}"));
+            assert_eq!(frame.sample_tick, 10 + i);
+            assert_eq!(frame.timestamp_ns, 20 + i);
+        }
+
+        assert!(source.read_all_telemetry_frame(99, 99).unwrap().is_none());
+        assert_eq!(source.status().unwrap(), AccGameStatus::Off);
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_replay_source_invalid_file_returns_err() {
+        let tmp = std::env::temp_dir().join("nonexistent_file_that_does_not_exist.acctlm2");
+        let result = ReplayTelemetrySource::open(&tmp);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_replay_source_status_live_when_frames() {
+        // Direct construction — no file needed
+        let mut source = ReplayTelemetrySource {
+            frames: vec![replay_frame(0)].into(),
+            metadata: replay_test_metadata(),
+            raw_static_bytes: vec![],
+            session_info: AccSessionInfo {
+                track_name: "test".to_string(),
+                car_model: "test".to_string(),
+            },
+        };
+
+        assert_eq!(source.status().unwrap(), AccGameStatus::Live);
+
+        let _ = source.read_telemetry_frame(0, 0).unwrap();
+        assert_eq!(source.status().unwrap(), AccGameStatus::Off);
+    }
+
+    #[test]
+    fn test_replay_source_empty_immediately_off() {
+        let mut source = ReplayTelemetrySource {
+            frames: VecDeque::new(),
+            metadata: replay_test_metadata(),
+            raw_static_bytes: vec![],
+            session_info: AccSessionInfo::default(),
+        };
+
+        assert_eq!(source.status().unwrap(), AccGameStatus::Off);
+        assert!(source.read_telemetry_frame(0, 0).unwrap().is_none());
+        assert!(source.read_all_telemetry_frame(0, 0).unwrap().is_none());
     }
 }

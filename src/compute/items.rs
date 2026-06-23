@@ -248,16 +248,23 @@ pub struct DeltaTimeToLifeBestLap {
 
 impl Default for DeltaTimeToLifeBestLap {
     fn default() -> Self {
-        Self { last_lap_number: -1, index: 0 }
+        Self {
+            last_lap_number: -1,
+            index: 0,
+        }
     }
 }
 
 impl DeltaTimeToLifeBestLap {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 impl RealtimeComputeItem for DeltaTimeToLifeBestLap {
-    fn name(&self) -> &str { "delta_time_to_life_best_lap" }
+    fn name(&self) -> &str {
+        "delta_time_to_life_best_lap"
+    }
 
     fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
         let reference = ctx.reference_lap.ok_or(ComputeError::NoValidData)?;
@@ -313,16 +320,23 @@ pub struct DeltaTimeToSessionBestLap {
 
 impl Default for DeltaTimeToSessionBestLap {
     fn default() -> Self {
-        Self { last_lap_number: -1, index: 0 }
+        Self {
+            last_lap_number: -1,
+            index: 0,
+        }
     }
 }
 
 impl DeltaTimeToSessionBestLap {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 impl RealtimeComputeItem for DeltaTimeToSessionBestLap {
-    fn name(&self) -> &str { "delta_time_to_session_best_lap" }
+    fn name(&self) -> &str {
+        "delta_time_to_session_best_lap"
+    }
 
     fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
         let reference = ctx.reference_lap.ok_or(ComputeError::NoValidData)?;
@@ -350,13 +364,179 @@ impl RealtimeComputeItem for DeltaTimeToSessionBestLap {
                 || current_pos < reference[i + 1].session.normalized_car_position
             {
                 self.index = i;
-                return Ok(ref_time - current_time);
+                // Positive means the current lap is behind the session best.
+                return Ok(current_time - ref_time);
             }
         }
 
         Err(ComputeError::ComputationFailed(
             "无法在参考圈中找到对应位置".into(),
         ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+/// 当前圈相对本 Session 最佳圈的插值时间差。
+///
+/// 与 `DeltaTimeToSessionBestLap` 保持独立：该实现会先将参考圈整理成单调的
+/// `(normalized_car_position, i_current_time)` 映射，再在相邻采样点之间线性插值。
+/// 正值表示当前圈落后，负值表示当前圈领先。
+pub struct DeltaTimeToSessionBestLapInterpolated {
+    reference_signature: Option<(usize, usize, u64, u64)>,
+    reference_points: Vec<(f64, f64)>,
+}
+
+impl Default for DeltaTimeToSessionBestLapInterpolated {
+    fn default() -> Self {
+        Self {
+            reference_signature: None,
+            reference_points: Vec::new(),
+        }
+    }
+}
+
+impl DeltaTimeToSessionBestLapInterpolated {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn refresh_reference_points(&mut self, reference: &[TelemetryFrame]) {
+        let signature = (
+            reference.as_ptr() as usize,
+            reference.len(),
+            reference
+                .first()
+                .map(|frame| frame.sample_tick)
+                .unwrap_or(0),
+            reference.last().map(|frame| frame.sample_tick).unwrap_or(0),
+        );
+        if self.reference_signature == Some(signature) {
+            return;
+        }
+
+        self.reference_signature = Some(signature);
+        self.reference_points.clear();
+
+        // If pre-lap/out-lap frames are present, prefer the segment after the
+        // final start/finish wrap. Small backwards jitter is filtered below.
+        let start = reference
+            .windows(2)
+            .enumerate()
+            .filter(|(_, pair)| {
+                pair[1].session.normalized_car_position + 0.5
+                    < pair[0].session.normalized_car_position
+            })
+            .map(|(index, _)| index + 1)
+            .last()
+            .unwrap_or(0);
+
+        for frame in &reference[start..] {
+            let position = frame.session.normalized_car_position as f64;
+            let time_ms = frame.timing.i_current_time as f64;
+            if !position.is_finite()
+                || !time_ms.is_finite()
+                || !(0.0..=1.0).contains(&position)
+                || time_ms < 0.0
+            {
+                continue;
+            }
+            if let Some(&(last_position, last_time_ms)) = self.reference_points.last() {
+                if position <= last_position || time_ms < last_time_ms {
+                    continue;
+                }
+            }
+            self.reference_points.push((position, time_ms));
+        }
+
+        if let Some(&(first_position, first_time_ms)) = self.reference_points.first() {
+            if first_position > 0.0 && first_time_ms > 0.0 {
+                self.reference_points.insert(0, (0.0, 0.0));
+            }
+        }
+    }
+}
+
+impl RealtimeComputeItem for DeltaTimeToSessionBestLapInterpolated {
+    fn name(&self) -> &str {
+        "delta_time_to_session_best_lap_interpolated"
+    }
+
+    fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
+        let reference = ctx.reference_lap.ok_or(ComputeError::NoValidData)?;
+        self.refresh_reference_points(reference);
+        if self.reference_points.len() < 2 {
+            return Err(ComputeError::InvalidReferenceData);
+        }
+
+        let current_position = ctx.current_frame.session.normalized_car_position as f64;
+        let current_time_ms = ctx.current_frame.timing.i_current_time as f64;
+        if !current_position.is_finite()
+            || !current_time_ms.is_finite()
+            || !(0.0..=1.0).contains(&current_position)
+            || current_time_ms < 0.0
+        {
+            return Err(ComputeError::NoValidData);
+        }
+
+        let upper = self
+            .reference_points
+            .partition_point(|&(position, _)| position <= current_position);
+        let lower = upper.saturating_sub(1).min(self.reference_points.len() - 2);
+        let (position_0, time_0) = self.reference_points[lower];
+        let (position_1, time_1) = self.reference_points[lower + 1];
+        let span = position_1 - position_0;
+        if span <= f64::EPSILON || time_1 < time_0 {
+            return Err(ComputeError::InvalidReferenceData);
+        }
+
+        let ratio = (current_position - position_0) / span;
+        let reference_time_ms = time_0 + ratio * (time_1 - time_0);
+        Ok(current_time_ms - reference_time_ms)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Car coordinates — 世界坐标提取
+// ---------------------------------------------------------------------------
+
+/// 赛车世界坐标 X（米），从 other_cars.car_coordinates[0] 提取
+pub struct CarCoordX;
+
+impl CarCoordX {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl RealtimeComputeItem for CarCoordX {
+    fn name(&self) -> &str {
+        "car_x"
+    }
+
+    fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
+        let coords = &ctx.current_frame.other_cars.car_coordinates;
+        Ok(coords.first().copied().unwrap_or(0.0) as f64)
+    }
+}
+
+/// 赛车世界坐标 Z（米），从 other_cars.car_coordinates[2] 提取
+pub struct CarCoordZ;
+
+impl CarCoordZ {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl RealtimeComputeItem for CarCoordZ {
+    fn name(&self) -> &str {
+        "car_z"
+    }
+
+    fn compute(&mut self, ctx: &ComputeContext) -> ComputeResult<f64> {
+        let coords = &ctx.current_frame.other_cars.car_coordinates;
+        Ok(coords.get(2).copied().unwrap_or(0.0) as f64)
     }
 }
 
@@ -383,6 +563,8 @@ pub struct BuiltinCalcItemEntry {
 /// - `calc:delta_time_to_life_best_lap` — 当前圈与历史最佳圈时间差（毫秒），需外部参考圈文件
 /// - `calc:delta_time_to_session_best_lap` — 当前圈与本次 session 最佳圈时间差（毫秒），
 ///   参考圈运行时动态注入
+/// - `calc:delta_time_to_session_best_lap_interpolated` — 当前圈与本次 session 最佳圈的
+///   线性插值时间差（毫秒），参考圈运行时动态注入
 ///
 /// # 使用示例
 ///
@@ -404,6 +586,15 @@ pub fn all_builtin_calculated_items() -> Vec<BuiltinCalcItemEntry> {
         BuiltinCalcItemEntry {
             key: ItemKey::new(ItemType::Calculated, "delta_time_to_session_best_lap"),
             description: "当前圈与本Session最佳圈时间差",
+            unit: Some("ms"),
+            requires_reference: true,
+        },
+        BuiltinCalcItemEntry {
+            key: ItemKey::new(
+                ItemType::Calculated,
+                "delta_time_to_session_best_lap_interpolated",
+            ),
+            description: "当前圈与本Session最佳圈插值时间差",
             unit: Some("ms"),
             requires_reference: true,
         },
@@ -437,6 +628,18 @@ pub fn all_builtin_calculated_items() -> Vec<BuiltinCalcItemEntry> {
             unit: Some("ms"),
             requires_reference: false,
         },
+        BuiltinCalcItemEntry {
+            key: ItemKey::new(ItemType::Calculated, "car_x"),
+            description: "赛车世界坐标X",
+            unit: Some("m"),
+            requires_reference: false,
+        },
+        BuiltinCalcItemEntry {
+            key: ItemKey::new(ItemType::Calculated, "car_z"),
+            description: "赛车世界坐标Z",
+            unit: Some("m"),
+            requires_reference: false,
+        },
     ]
 }
 
@@ -444,23 +647,33 @@ pub fn all_builtin_calculated_items() -> Vec<BuiltinCalcItemEntry> {
 mod tests {
     use super::*;
     use crate::types::{
-        CarStateSample, ControlSample, EnvironmentSample, MotionSample,
-        OtherCarsSample, PowertrainSample, SessionSample, TimingSample, TyreSample,
+        CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
+        PowertrainSample, SessionSample, TimingSample, TyreSample,
     };
     use std::collections::HashMap;
 
     fn make_frame(speed: f32, lap: i32, pos: f32, time: i32) -> TelemetryFrame {
         TelemetryFrame {
-            sample_tick: 0, timestamp_ns: 0,
-            controls: ControlSample { speed_kmh: speed, ..ControlSample::default() },
-            motion: MotionSample::default(), tyres: TyreSample::default(),
+            sample_tick: 0,
+            timestamp_ns: 0,
+            controls: ControlSample {
+                speed_kmh: speed,
+                ..ControlSample::default()
+            },
+            motion: MotionSample::default(),
+            tyres: TyreSample::default(),
             powertrain: PowertrainSample::default(),
             session: SessionSample {
-                completed_laps: lap, normalized_car_position: pos,
+                completed_laps: lap,
+                normalized_car_position: pos,
                 ..SessionSample::default()
             },
-            timing: TimingSample { i_current_time: time, ..TimingSample::default() },
-            car_state: CarStateSample::default(), environment: EnvironmentSample::default(),
+            timing: TimingSample {
+                i_current_time: time,
+                ..TimingSample::default()
+            },
+            car_state: CarStateSample::default(),
+            environment: EnvironmentSample::default(),
             other_cars: OtherCarsSample::default(),
         }
     }
@@ -505,9 +718,12 @@ mod tests {
         let frame = make_frame(200.0, 1, 0.5, 51000);
         let values = HashMap::new();
         let ctx = ComputeContext::with_reference(
-            &frame, &values, &reference,
+            &frame,
+            &values,
+            &reference,
             crate::compute::context::ReferenceSource {
-                file_path: std::path::PathBuf::from("t.acctlm"), lap_number: 1,
+                file_path: std::path::PathBuf::from("t.acctlm"),
+                lap_number: 1,
             },
         );
         let mut item = DeltaTimeToLifeBestLap::new();
@@ -547,9 +763,12 @@ mod tests {
         let frame = make_frame(200.0, 2, 0.5, 52000);
         let values = HashMap::new();
         let ctx = ComputeContext::with_reference(
-            &frame, &values, &reference,
+            &frame,
+            &values,
+            &reference,
             crate::compute::context::ReferenceSource {
-                file_path: std::path::PathBuf::from("t.acctlm"), lap_number: 1,
+                file_path: std::path::PathBuf::from("t.acctlm"),
+                lap_number: 1,
             },
         );
         let mut item = DeltaTimeToLifeBestLap::new();
@@ -560,17 +779,26 @@ mod tests {
     #[test]
     fn test_all_builtin_calculated_items() {
         let items = super::all_builtin_calculated_items();
-        assert_eq!(items.len(), 7);
+        assert_eq!(items.len(), 10);
 
-        let delta = items.iter().find(|i| i.key.to_string() == "calc:delta_time_to_life_best_lap").unwrap();
+        let delta = items
+            .iter()
+            .find(|i| i.key.to_string() == "calc:delta_time_to_life_best_lap")
+            .unwrap();
         assert_eq!(delta.description, "当前圈与历史最佳圈时间差");
         assert!(delta.requires_reference);
 
-        let session = items.iter().find(|i| i.key.to_string() == "calc:delta_time_to_session_best_lap").unwrap();
+        let session = items
+            .iter()
+            .find(|i| i.key.to_string() == "calc:delta_time_to_session_best_lap")
+            .unwrap();
         assert_eq!(session.description, "当前圈与本Session最佳圈时间差");
         assert!(session.requires_reference);
 
-        let prev = items.iter().find(|i| i.key.to_string() == "calc:prev_sector_time").unwrap();
+        let prev = items
+            .iter()
+            .find(|i| i.key.to_string() == "calc:prev_sector_time")
+            .unwrap();
         assert_eq!(prev.unit, Some("ms"));
         assert!(!prev.requires_reference);
     }
@@ -594,14 +822,61 @@ mod tests {
         let frame = make_frame(200.0, 1, 0.5, 52000);
         let values = HashMap::new();
         let ctx = ComputeContext::with_reference(
-            &frame, &values, &reference,
+            &frame,
+            &values,
+            &reference,
             crate::compute::context::ReferenceSource {
-                file_path: std::path::PathBuf::from("t.acctlm"), lap_number: 1,
+                file_path: std::path::PathBuf::from("t.acctlm"),
+                lap_number: 1,
             },
         );
         let mut item = DeltaTimeToSessionBestLap::new();
         let delta = item.compute(&ctx).unwrap();
-        assert!((delta + 2000.0).abs() < 1.0); // 慢 2 秒
+        assert!((delta - 2000.0).abs() < 1.0); // 慢 2 秒
+    }
+
+    #[test]
+    fn test_interpolated_session_best_lap_uses_adjacent_reference_points() {
+        let reference = vec![
+            make_frame(200.0, 1, 0.0, 0),
+            make_frame(200.0, 1, 0.4, 40_000),
+            make_frame(200.0, 1, 0.6, 62_000),
+            make_frame(200.0, 1, 1.0, 100_000),
+        ];
+        let frame = make_frame(200.0, 2, 0.5, 52_000);
+        let values = HashMap::new();
+        let ctx = ComputeContext::with_reference(
+            &frame,
+            &values,
+            &reference,
+            crate::compute::context::ReferenceSource::session_best(),
+        );
+        let mut item = DeltaTimeToSessionBestLapInterpolated::new();
+
+        // Reference time at 0.5 is 51,000 ms, so the current lap is 1,000 ms behind.
+        assert!((item.compute(&ctx).unwrap() - 1_000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_interpolated_session_best_lap_prefers_segment_after_wrap() {
+        let reference = vec![
+            make_frame(200.0, 0, 0.8, 70_000),
+            make_frame(200.0, 0, 0.9, 80_000),
+            make_frame(200.0, 1, 0.0, 0),
+            make_frame(200.0, 1, 0.5, 50_000),
+            make_frame(200.0, 1, 1.0, 100_000),
+        ];
+        let frame = make_frame(200.0, 2, 0.85, 86_000);
+        let values = HashMap::new();
+        let ctx = ComputeContext::with_reference(
+            &frame,
+            &values,
+            &reference,
+            crate::compute::context::ReferenceSource::session_best(),
+        );
+        let mut item = DeltaTimeToSessionBestLapInterpolated::new();
+
+        assert!((item.compute(&ctx).unwrap() - 1_000.0).abs() < 0.01);
     }
 
     // -----------------------------------------------------------------------
@@ -688,14 +963,20 @@ mod tests {
 
         // 0→1
         let f1 = make_sector_frame(0, 1, 0, 1);
-        time_item.compute(&ComputeContext::new(&f1, &values)).unwrap();
+        time_item
+            .compute(&ComputeContext::new(&f1, &values))
+            .unwrap();
         let f2 = make_sector_frame(1, 1, 25000, 1);
-        let r2 = time_item.compute(&ComputeContext::new(&f2, &values)).unwrap();
+        let r2 = time_item
+            .compute(&ComputeContext::new(&f2, &values))
+            .unwrap();
         assert!((r2 - 25000.0).abs() < 0.01);
 
         // 1→2
         let f3 = make_sector_frame(2, 1, 30000, 1);
-        let r3 = time_item.compute(&ComputeContext::new(&f3, &values)).unwrap();
+        let r3 = time_item
+            .compute(&ComputeContext::new(&f3, &values))
+            .unwrap();
         assert!((r3 - 30000.0).abs() < 0.01);
     }
 
@@ -719,13 +1000,21 @@ mod tests {
         let values = HashMap::new();
 
         let f1 = make_sector_frame(0, 1, 0, 1);
-        time_item.compute(&ComputeContext::new(&f1, &values)).unwrap();
-        num_item.compute(&ComputeContext::new(&f1, &values)).unwrap();
+        time_item
+            .compute(&ComputeContext::new(&f1, &values))
+            .unwrap();
+        num_item
+            .compute(&ComputeContext::new(&f1, &values))
+            .unwrap();
 
         // Transition 0→1: previous sector was 0
         let f2 = make_sector_frame(1, 1, 25000, 1);
-        time_item.compute(&ComputeContext::new(&f2, &values)).unwrap();
-        let num_r2 = num_item.compute(&ComputeContext::new(&f2, &values)).unwrap();
+        time_item
+            .compute(&ComputeContext::new(&f2, &values))
+            .unwrap();
+        let num_r2 = num_item
+            .compute(&ComputeContext::new(&f2, &values))
+            .unwrap();
         assert!((num_r2 - 0.0).abs() < 0.01); // sector 0 just completed
     }
 
@@ -736,19 +1025,31 @@ mod tests {
 
         // Transition 0→1
         let f1 = make_sector_frame(0, 1, 0, 1);
-        time_item.compute(&ComputeContext::new(&f1, &values)).unwrap();
-        num_item.compute(&ComputeContext::new(&f1, &values)).unwrap();
+        time_item
+            .compute(&ComputeContext::new(&f1, &values))
+            .unwrap();
+        num_item
+            .compute(&ComputeContext::new(&f1, &values))
+            .unwrap();
 
         let f2 = make_sector_frame(1, 1, 30456, 1);
-        let time_r = time_item.compute(&ComputeContext::new(&f2, &values)).unwrap();
-        let num_r = num_item.compute(&ComputeContext::new(&f2, &values)).unwrap();
+        let time_r = time_item
+            .compute(&ComputeContext::new(&f2, &values))
+            .unwrap();
+        let num_r = num_item
+            .compute(&ComputeContext::new(&f2, &values))
+            .unwrap();
         assert!((time_r - 30456.0).abs() < 0.01);
         assert!((num_r - 0.0).abs() < 0.01);
 
         // Transition 1→2
         let f3 = make_sector_frame(2, 1, 18000, 1);
-        let time_r3 = time_item.compute(&ComputeContext::new(&f3, &values)).unwrap();
-        let num_r3 = num_item.compute(&ComputeContext::new(&f3, &values)).unwrap();
+        let time_r3 = time_item
+            .compute(&ComputeContext::new(&f3, &values))
+            .unwrap();
+        let num_r3 = num_item
+            .compute(&ComputeContext::new(&f3, &values))
+            .unwrap();
         assert!((time_r3 - 18000.0).abs() < 0.01);
         assert!((num_r3 - 1.0).abs() < 0.01);
     }

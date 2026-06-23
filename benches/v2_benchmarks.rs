@@ -11,11 +11,10 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::fs;
 
 use module_live_telemetry::{
-    any_reader::open_telemetry_file,
-    BinaryTelemetryReaderV2, BinaryTelemetryWriter, BinaryTelemetryWriterV2,
-    CarStateSample, ControlSample, EnvironmentSample, LiveTelemetryConfig, MotionSample,
-    OtherCarsSample, PowertrainSample, SessionMetadata, SessionSample, TelemetryFrame,
-    TimingSample, TyreSample,
+    any_reader::open_telemetry_file, BinaryTelemetryReaderV2, BinaryTelemetryWriter,
+    BinaryTelemetryWriterV2, CarStateSample, ControlSample, EnvironmentSample, LiveTelemetryConfig,
+    MotionSample, OtherCarsSample, PowertrainSample, SessionMetadata, SessionSample,
+    TelemetryFrame, TimingSample, TyreSample,
 };
 
 const FRAME_COUNT: u64 = 10_000;

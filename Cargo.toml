@@ -19,6 +19,7 @@ path = "src/bin/acctlm-to-acctlm2.rs"
 crossbeam-channel = "0.5"
 crc32fast = "1"
 ctrlc = "3.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
 memmap2 = "0.9"
 
 [dev-dependencies]

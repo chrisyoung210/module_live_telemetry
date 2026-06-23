@@ -1,65 +1,60 @@
 use crate::error::{TelemetryError, TelemetryResult};
 use crate::format::{
     crc32, read_i32, read_u16, read_u32, read_u64, validate_schema, x1000_to_hz, ChunkHeader,
-    ColumnEntry, FileHeader, IndexEntry, LAP_INDEX_MAGIC, CHUNK_MAGIC, CLUSTER_ENVIRONMENT,
-    CLUSTER_SESSION, CLUSTER_TIMING, CLUSTER_CAR_STATE, CLUSTER_MOTION,
-    CLUSTER_OTHER_CARS, CLUSTER_POWERTRAIN, CLUSTER_TYRES,
-    COL_AIR_DENSITY, COL_AIR_TEMP, COL_BRAKE, COL_CLUTCH, COL_COMPLETED_LAPS, COL_CLOCK,
-    COL_CURRENT_SECTOR_INDEX, COL_CURRENT_TIME_STR, COL_DISTANCE_TRAVELED, COL_FUEL,
-    COL_FUEL_ESTIMATED_LAPS, COL_FUEL_X_LAP, COL_GAS, COL_GEAR, COL_GAP_AHEAD_OR_TAIL,
-    COL_GAP_BEHIND, COL_FLAG, COL_GLOBAL_CHEQUERED, COL_GLOBAL_GREEN, COL_GLOBAL_RED,
-    COL_GLOBAL_WHITE, COL_GLOBAL_YELLOW, COL_GLOBAL_YELLOW1, COL_GLOBAL_YELLOW2,
-    COL_GLOBAL_YELLOW3, COL_I_BEST_TIME, COL_I_CURRENT_TIME, COL_I_DELTA_LAP_TIME,
-    COL_I_ESTIMATED_LAP_TIME, COL_I_LAST_TIME, COL_I_SPLIT, COL_IS_DELTA_POSITIVE,
-    COL_IS_IN_PIT, COL_IS_IN_PIT_LANE, COL_IS_VALID_LAP, COL_LAST_SECTOR_TIME,
-    COL_LAST_TIME_STR, COL_MANDATORY_PIT_DONE, COL_MISSING_MANDATORY_PITS,
-    COL_NORMALIZED_CAR_POSITION, COL_NUMBER_OF_LAPS, COL_OBSERVED_SLOT_BEFORE_I_SPLIT,
-    COL_PENALTY_TIME, COL_PENALTY_TYPE, COL_POSITION, COL_RAIN_INTENSITY,
-    COL_RAIN_INTENSITY_IN_10MIN, COL_RAIN_INTENSITY_IN_30MIN, COL_RPMS,
-    COL_REPLAY_TIME_MULTIPLIER, COL_ROAD_TEMP, COL_SESSION, COL_SESSION_INDEX,
-    COL_SESSION_TIME_LEFT, COL_SPEED_KMH, COL_SPLIT_STR, COL_STEER_ANGLE, COL_STATUS,
-    COL_SURFACE_GRIP, COL_TIMESTAMP_NS, COL_TRACK_STATUS, COL_SAMPLE_TICK, COL_USED_FUEL,
-    COL_WIND_DIRECTION, COL_WIND_SPEED,
-    FOOTER_MAGIC, HEADER_SIZE, INDEX_MAGIC, META_MAGIC, COL_ESTIMATED_LAP_TIME_STR,
-    COL_DELTA_LAP_TIME_STR, COL_BEST_TIME_STR,
+    ColumnEntry, FileHeader, IndexEntry, CHUNK_MAGIC, CLUSTER_CAR_STATE, CLUSTER_ENVIRONMENT,
+    CLUSTER_MOTION, CLUSTER_OTHER_CARS, CLUSTER_POWERTRAIN, CLUSTER_SESSION, CLUSTER_TIMING,
+    CLUSTER_TYRES, COL_AIR_DENSITY, COL_AIR_TEMP, COL_BEST_TIME_STR, COL_BRAKE, COL_CLOCK,
+    COL_CLUTCH, COL_COMPLETED_LAPS, COL_CURRENT_SECTOR_INDEX, COL_CURRENT_TIME_STR,
+    COL_DELTA_LAP_TIME_STR, COL_DISTANCE_TRAVELED, COL_ESTIMATED_LAP_TIME_STR, COL_FLAG, COL_FUEL,
+    COL_FUEL_ESTIMATED_LAPS, COL_FUEL_X_LAP, COL_GAP_AHEAD_OR_TAIL, COL_GAP_BEHIND, COL_GAS,
+    COL_GEAR, COL_GLOBAL_CHEQUERED, COL_GLOBAL_GREEN, COL_GLOBAL_RED, COL_GLOBAL_WHITE,
+    COL_GLOBAL_YELLOW, COL_GLOBAL_YELLOW1, COL_GLOBAL_YELLOW2, COL_GLOBAL_YELLOW3,
+    COL_IS_DELTA_POSITIVE, COL_IS_IN_PIT, COL_IS_IN_PIT_LANE, COL_IS_VALID_LAP, COL_I_BEST_TIME,
+    COL_I_CURRENT_TIME, COL_I_DELTA_LAP_TIME, COL_I_ESTIMATED_LAP_TIME, COL_I_LAST_TIME,
+    COL_I_SPLIT, COL_LAST_SECTOR_TIME, COL_LAST_TIME_STR, COL_MANDATORY_PIT_DONE,
+    COL_MISSING_MANDATORY_PITS, COL_NORMALIZED_CAR_POSITION, COL_NUMBER_OF_LAPS,
+    COL_OBSERVED_SLOT_BEFORE_I_SPLIT, COL_PENALTY_TIME, COL_PENALTY_TYPE, COL_POSITION,
+    COL_RAIN_INTENSITY, COL_RAIN_INTENSITY_IN_10MIN, COL_RAIN_INTENSITY_IN_30MIN,
+    COL_REPLAY_TIME_MULTIPLIER, COL_ROAD_TEMP, COL_RPMS, COL_SAMPLE_TICK, COL_SESSION,
+    COL_SESSION_INDEX, COL_SESSION_TIME_LEFT, COL_SPEED_KMH, COL_SPLIT_STR, COL_STATUS,
+    COL_STEER_ANGLE, COL_SURFACE_GRIP, COL_TIMESTAMP_NS, COL_TRACK_STATUS, COL_USED_FUEL,
+    COL_WIND_DIRECTION, COL_WIND_SPEED, FOOTER_MAGIC, HEADER_SIZE, INDEX_MAGIC, LAP_INDEX_MAGIC,
+    META_MAGIC,
 };
 
 // Motion, Tyres, Powertrain, CarState, OtherCars column IDs
 use crate::format::{
-    COL_VELOCITY, COL_ACC_G, COL_LOCAL_VELOCITY, COL_LOCAL_ANGULAR_VEL,
-    COL_HEADING, COL_PITCH, COL_ROLL,
-    COL_WHEEL_SLIP, COL_WHEEL_LOAD, COL_WHEELS_PRESSURE, COL_WHEEL_ANGULAR_SPEED,
-    COL_TYRE_WEAR, COL_TYRE_DIRTY_LEVEL, COL_TYRE_CORE_TEMPERATURE, COL_CAMBER_RAD,
-    COL_SUSPENSION_TRAVEL, COL_SLIP_RATIO, COL_SLIP_ANGLE, COL_TYRE_TEMP_I,
-    COL_TYRE_TEMP_M, COL_TYRE_TEMP_O, COL_TYRE_TEMP, COL_MZ, COL_FX, COL_FY,
-    COL_SUSPENSION_DAMAGE, COL_BRAKE_TEMP, COL_BRAKE_PRESSURE, COL_PAD_LIFE, COL_DISC_LIFE,
-    COL_TYRE_CONTACT_POINT, COL_TYRE_CONTACT_NORMAL, COL_TYRE_CONTACT_HEADING,
-    COL_NUMBER_OF_TYRES_OUT, COL_FRONT_BRAKE_COMPOUND, COL_REAR_BRAKE_COMPOUND,
-    COL_TURBO_BOOST, COL_BALLAST, COL_KERS_CHARGE, COL_KERS_INPUT, COL_KERS_CURRENT_KJ,
-    COL_DRS, COL_TC_PHYSICS, COL_ABS_PHYSICS, COL_ENGINE_BRAKE, COL_ERS_RECOVERY_LEVEL,
-    COL_ERS_POWER_LEVEL, COL_ERS_HEAT_CHARGING, COL_ERS_IS_CHARGING, COL_DRS_AVAILABLE,
-    COL_DRS_ENABLED, COL_TC_IN_ACTION, COL_ABS_IN_ACTION, COL_AUTO_SHIFTER_ON,
-    COL_CURRENT_MAX_RPM, COL_P2P_ACTIVATIONS, COL_P2P_STATUS, COL_WATER_TEMP,
-    COL_CAR_DAMAGE, COL_PIT_LIMITER_ON, COL_RIDE_HEIGHT, COL_IGNITION_ON,
-    COL_STARTER_ENGINE_ON, COL_IS_ENGINE_RUNNING, COL_IS_AI_CONTROLLED, COL_CG_HEIGHT,
-    COL_BRAKE_BIAS, COL_RAIN_LIGHTS, COL_FLASHING_LIGHTS, COL_LIGHTS_STAGE, COL_WIPER_LV,
-    COL_DRIVER_STINT_TOTAL_TIME_LEFT, COL_DRIVER_STINT_TIME_LEFT, COL_RAIN_TYRES,
-    COL_CURRENT_TYRE_SET, COL_STRATEGY_TYRE_SET, COL_TRACK_GRIP_STATUS, COL_TYRE_COMPOUND_STR,
-    COL_MFD_TYRE_SET, COL_MFD_FUEL_TO_ADD, COL_MFD_TYRE_PRESSURE, COL_IDEAL_LINE_ON,
-    COL_IS_SETUP_MENU_VISIBLE, COL_MAIN_DISPLAY_INDEX, COL_SECONDARY_DISPLAY_INDEX,
-    COL_DIRECTION_LIGHTS_LEFT, COL_DIRECTION_LIGHTS_RIGHT, COL_TC_LEVEL, COL_TC_CUT,
-    COL_ENGINE_MAP, COL_ABS_LEVEL, COL_EXHAUST_TEMPERATURE, COL_FINAL_FF,
-    COL_PERFORMANCE_METER, COL_KERB_VIBRATION, COL_SLIP_VIBRATIONS, COL_G_VIBRATIONS,
-    COL_ABS_VIBRATIONS,
-    COL_ACTIVE_CARS, COL_PLAYER_CAR_ID, COL_CAR_COORDINATES, COL_CAR_ID,
+    COL_ABS_IN_ACTION, COL_ABS_LEVEL, COL_ABS_PHYSICS, COL_ABS_VIBRATIONS, COL_ACC_G,
+    COL_ACTIVE_CARS, COL_AUTO_SHIFTER_ON, COL_BALLAST, COL_BRAKE_BIAS, COL_BRAKE_PRESSURE,
+    COL_BRAKE_TEMP, COL_CAMBER_RAD, COL_CAR_COORDINATES, COL_CAR_DAMAGE, COL_CAR_ID, COL_CG_HEIGHT,
+    COL_CURRENT_MAX_RPM, COL_CURRENT_TYRE_SET, COL_DIRECTION_LIGHTS_LEFT,
+    COL_DIRECTION_LIGHTS_RIGHT, COL_DISC_LIFE, COL_DRIVER_STINT_TIME_LEFT,
+    COL_DRIVER_STINT_TOTAL_TIME_LEFT, COL_DRS, COL_DRS_AVAILABLE, COL_DRS_ENABLED,
+    COL_ENGINE_BRAKE, COL_ENGINE_MAP, COL_ERS_HEAT_CHARGING, COL_ERS_IS_CHARGING,
+    COL_ERS_POWER_LEVEL, COL_ERS_RECOVERY_LEVEL, COL_EXHAUST_TEMPERATURE, COL_FINAL_FF,
+    COL_FLASHING_LIGHTS, COL_FRONT_BRAKE_COMPOUND, COL_FX, COL_FY, COL_G_VIBRATIONS, COL_HEADING,
+    COL_IDEAL_LINE_ON, COL_IGNITION_ON, COL_IS_AI_CONTROLLED, COL_IS_ENGINE_RUNNING,
+    COL_IS_SETUP_MENU_VISIBLE, COL_KERB_VIBRATION, COL_KERS_CHARGE, COL_KERS_CURRENT_KJ,
+    COL_KERS_INPUT, COL_LIGHTS_STAGE, COL_LOCAL_ANGULAR_VEL, COL_LOCAL_VELOCITY,
+    COL_MAIN_DISPLAY_INDEX, COL_MFD_FUEL_TO_ADD, COL_MFD_TYRE_PRESSURE, COL_MFD_TYRE_SET, COL_MZ,
+    COL_NUMBER_OF_TYRES_OUT, COL_P2P_ACTIVATIONS, COL_P2P_STATUS, COL_PAD_LIFE,
+    COL_PERFORMANCE_METER, COL_PITCH, COL_PIT_LIMITER_ON, COL_PLAYER_CAR_ID, COL_RAIN_LIGHTS,
+    COL_RAIN_TYRES, COL_REAR_BRAKE_COMPOUND, COL_RIDE_HEIGHT, COL_ROLL,
+    COL_SECONDARY_DISPLAY_INDEX, COL_SLIP_ANGLE, COL_SLIP_RATIO, COL_SLIP_VIBRATIONS,
+    COL_STARTER_ENGINE_ON, COL_STRATEGY_TYRE_SET, COL_SUSPENSION_DAMAGE, COL_SUSPENSION_TRAVEL,
+    COL_TC_CUT, COL_TC_IN_ACTION, COL_TC_LEVEL, COL_TC_PHYSICS, COL_TRACK_GRIP_STATUS,
+    COL_TURBO_BOOST, COL_TYRE_COMPOUND_STR, COL_TYRE_CONTACT_HEADING, COL_TYRE_CONTACT_NORMAL,
+    COL_TYRE_CONTACT_POINT, COL_TYRE_CORE_TEMPERATURE, COL_TYRE_DIRTY_LEVEL, COL_TYRE_TEMP,
+    COL_TYRE_TEMP_I, COL_TYRE_TEMP_M, COL_TYRE_TEMP_O, COL_TYRE_WEAR, COL_VELOCITY, COL_WATER_TEMP,
+    COL_WHEELS_PRESSURE, COL_WHEEL_ANGULAR_SPEED, COL_WHEEL_LOAD, COL_WHEEL_SLIP, COL_WIPER_LV,
 };
-use crate::types::{
-    CarStateSample, ControlSample, EnvironmentSample, MotionSample, OtherCarsSample,
-    PowertrainSample, RecordingSummary, SessionMetadata, SessionSample,
-    TimingSample, TyreSample, LapIndexEntry, CLUSTER_CONTROLS,
-};
-use crate::reader_v2::BinaryTelemetryReaderV2;
 use crate::item_key::ItemKey;
+use crate::reader_v2::BinaryTelemetryReaderV2;
+use crate::types::{
+    CarStateSample, ControlSample, EnvironmentSample, LapIndexEntry, MotionSample, OtherCarsSample,
+    PowertrainSample, RecordingSummary, SessionMetadata, SessionSample, TimingSample, TyreSample,
+    CLUSTER_CONTROLS,
+};
 use crate::writer::TelemetryFrame;
 use std::fs::File;
 use std::io::{Cursor, Read};
@@ -168,7 +163,10 @@ impl BinaryTelemetryReader {
         };
 
         let lap_entries = if footer_offset > 0 {
-            let lap_offset = footer_offset + 12 + (index_entries.len() as u64) * IndexEntry::BYTE_LEN as u64 + 28;
+            let lap_offset = footer_offset
+                + 12
+                + (index_entries.len() as u64) * IndexEntry::BYTE_LEN as u64
+                + 28;
             read_lap_index_if_present(&bytes, lap_offset)
         } else {
             Vec::new()
@@ -176,8 +174,12 @@ impl BinaryTelemetryReader {
 
         Ok(Self {
             inner: InnerReader::V1 {
-                bytes, header, metadata,
-                index_entries, lap_entries, summary,
+                bytes,
+                header,
+                metadata,
+                index_entries,
+                lap_entries,
+                summary,
             },
         })
     }
@@ -227,14 +229,18 @@ impl BinaryTelemetryReader {
     pub fn lap_index(&self) -> Vec<LapIndexEntry> {
         match &self.inner {
             InnerReader::V1 { lap_entries, .. } => lap_entries.clone(),
-            InnerReader::V2(r) => r.lap_index().iter().map(|e| LapIndexEntry {
-                lap_number: e.lap_number,
-                start_tick: e.start_tick,
-                end_tick: e.end_tick,
-                sample_count: e.sample_count,
-                is_valid: e.is_valid,
-                is_out_lap: e.is_out_lap,
-            }).collect(),
+            InnerReader::V2(r) => r
+                .lap_index()
+                .iter()
+                .map(|e| LapIndexEntry {
+                    lap_number: e.lap_number,
+                    start_tick: e.start_tick,
+                    end_tick: e.end_tick,
+                    sample_count: e.sample_count,
+                    is_valid: e.is_valid,
+                    is_out_lap: e.is_out_lap,
+                })
+                .collect(),
         }
     }
 
@@ -329,101 +335,137 @@ impl BinaryTelemetryReader {
     // read_*_range — tick-range reads (v2 uses skip index; v1 reads all + filters)
     // -----------------------------------------------------------------------
 
-    pub fn read_controls_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<ControlSample>> {
+    pub fn read_controls_range(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<ControlSample>> {
         match &self.inner {
-            InnerReader::V1 { .. } => {
-                Ok(self.read_all_controls()?.into_iter()
-                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
-                    .collect())
-            }
+            InnerReader::V1 { .. } => Ok(self
+                .read_all_controls()?
+                .into_iter()
+                .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                .collect()),
             InnerReader::V2(r) => r.read_controls_range_v2(start_tick, end_tick),
         }
     }
 
-    pub fn read_motion_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<MotionSample>> {
+    pub fn read_motion_range(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<MotionSample>> {
         match &self.inner {
-            InnerReader::V1 { .. } => {
-                Ok(self.read_all_motion()?.into_iter()
-                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
-                    .collect())
-            }
+            InnerReader::V1 { .. } => Ok(self
+                .read_all_motion()?
+                .into_iter()
+                .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                .collect()),
             InnerReader::V2(r) => r.read_motion_range_v2(start_tick, end_tick),
         }
     }
 
-    pub fn read_tyres_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<TyreSample>> {
+    pub fn read_tyres_range(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<TyreSample>> {
         match &self.inner {
-            InnerReader::V1 { .. } => {
-                Ok(self.read_all_tyres()?.into_iter()
-                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
-                    .collect())
-            }
+            InnerReader::V1 { .. } => Ok(self
+                .read_all_tyres()?
+                .into_iter()
+                .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                .collect()),
             InnerReader::V2(r) => r.read_tyres_range_v2(start_tick, end_tick),
         }
     }
 
-    pub fn read_powertrain_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<PowertrainSample>> {
+    pub fn read_powertrain_range(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<PowertrainSample>> {
         match &self.inner {
-            InnerReader::V1 { .. } => {
-                Ok(self.read_all_powertrain()?.into_iter()
-                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
-                    .collect())
-            }
+            InnerReader::V1 { .. } => Ok(self
+                .read_all_powertrain()?
+                .into_iter()
+                .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                .collect()),
             InnerReader::V2(r) => r.read_powertrain_range_v2(start_tick, end_tick),
         }
     }
 
-    pub fn read_session_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<SessionSample>> {
+    pub fn read_session_range(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<SessionSample>> {
         match &self.inner {
-            InnerReader::V1 { .. } => {
-                Ok(self.read_all_session()?.into_iter()
-                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
-                    .collect())
-            }
+            InnerReader::V1 { .. } => Ok(self
+                .read_all_session()?
+                .into_iter()
+                .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                .collect()),
             InnerReader::V2(r) => r.read_session_range_v2(start_tick, end_tick),
         }
     }
 
-    pub fn read_timing_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<TimingSample>> {
+    pub fn read_timing_range(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<TimingSample>> {
         match &self.inner {
-            InnerReader::V1 { .. } => {
-                Ok(self.read_all_timing()?.into_iter()
-                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
-                    .collect())
-            }
+            InnerReader::V1 { .. } => Ok(self
+                .read_all_timing()?
+                .into_iter()
+                .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                .collect()),
             InnerReader::V2(r) => r.read_timing_range_v2(start_tick, end_tick),
         }
     }
 
-    pub fn read_car_state_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<CarStateSample>> {
+    pub fn read_car_state_range(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<CarStateSample>> {
         match &self.inner {
-            InnerReader::V1 { .. } => {
-                Ok(self.read_all_car_state()?.into_iter()
-                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
-                    .collect())
-            }
+            InnerReader::V1 { .. } => Ok(self
+                .read_all_car_state()?
+                .into_iter()
+                .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                .collect()),
             InnerReader::V2(r) => r.read_car_state_range_v2(start_tick, end_tick),
         }
     }
 
-    pub fn read_environment_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<EnvironmentSample>> {
+    pub fn read_environment_range(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<EnvironmentSample>> {
         match &self.inner {
-            InnerReader::V1 { .. } => {
-                Ok(self.read_all_environment()?.into_iter()
-                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
-                    .collect())
-            }
+            InnerReader::V1 { .. } => Ok(self
+                .read_all_environment()?
+                .into_iter()
+                .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                .collect()),
             InnerReader::V2(r) => r.read_environment_range_v2(start_tick, end_tick),
         }
     }
 
-    pub fn read_other_cars_range(&self, start_tick: u64, end_tick: u64) -> TelemetryResult<Vec<OtherCarsSample>> {
+    pub fn read_other_cars_range(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+    ) -> TelemetryResult<Vec<OtherCarsSample>> {
         match &self.inner {
-            InnerReader::V1 { .. } => {
-                Ok(self.read_all_other_cars()?.into_iter()
-                    .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
-                    .collect())
-            }
+            InnerReader::V1 { .. } => Ok(self
+                .read_all_other_cars()?
+                .into_iter()
+                .filter(|s| s.sample_tick >= start_tick && s.sample_tick <= end_tick)
+                .collect()),
             InnerReader::V2(r) => r.read_other_cars_range_v2(start_tick, end_tick),
         }
     }
@@ -444,13 +486,20 @@ impl BinaryTelemetryReader {
     pub fn read_lap_frames(&self, lap_number: i32) -> TelemetryResult<Vec<TelemetryFrame>> {
         match &self.inner {
             InnerReader::V1 { lap_entries, .. } => {
-                let entry = lap_entries.iter().find(|e| e.lap_number == lap_number)
-                    .ok_or_else(|| TelemetryError::InvalidArgument(format!(
-                        "lap {lap_number} not found in lap index"
-                    )))?;
+                let entry = lap_entries
+                    .iter()
+                    .find(|e| e.lap_number == lap_number)
+                    .ok_or_else(|| {
+                        TelemetryError::InvalidArgument(format!(
+                            "lap {lap_number} not found in lap index"
+                        ))
+                    })?;
                 let all = self.read_all_frames_v1()?;
-                Ok(all.into_iter()
-                    .filter(|f| f.sample_tick >= entry.start_tick && f.sample_tick <= entry.end_tick)
+                Ok(all
+                    .into_iter()
+                    .filter(|f| {
+                        f.sample_tick >= entry.start_tick && f.sample_tick <= entry.end_tick
+                    })
                     .collect())
             }
             InnerReader::V2(r) => r.read_lap_frames(lap_number),
@@ -539,7 +588,10 @@ impl BinaryTelemetryReader {
     fn read_all_controls_v1(&self) -> TelemetryResult<Vec<ControlSample>> {
         let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_CONTROLS) {
+        for entry in index_entries
+            .iter()
+            .filter(|e| e.cluster_id == CLUSTER_CONTROLS)
+        {
             out.extend(self.read_controls_chunk(entry, bytes)?);
         }
         Ok(out)
@@ -548,7 +600,10 @@ impl BinaryTelemetryReader {
     fn read_all_session_v1(&self) -> TelemetryResult<Vec<SessionSample>> {
         let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_SESSION) {
+        for entry in index_entries
+            .iter()
+            .filter(|e| e.cluster_id == CLUSTER_SESSION)
+        {
             out.extend(self.read_session_chunk(entry, bytes)?);
         }
         Ok(out)
@@ -557,7 +612,10 @@ impl BinaryTelemetryReader {
     fn read_all_timing_v1(&self) -> TelemetryResult<Vec<TimingSample>> {
         let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_TIMING) {
+        for entry in index_entries
+            .iter()
+            .filter(|e| e.cluster_id == CLUSTER_TIMING)
+        {
             out.extend(self.read_timing_chunk(entry, bytes)?);
         }
         Ok(out)
@@ -566,7 +624,10 @@ impl BinaryTelemetryReader {
     fn read_all_environment_v1(&self) -> TelemetryResult<Vec<EnvironmentSample>> {
         let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_ENVIRONMENT) {
+        for entry in index_entries
+            .iter()
+            .filter(|e| e.cluster_id == CLUSTER_ENVIRONMENT)
+        {
             out.extend(self.read_environment_chunk(entry, bytes)?);
         }
         Ok(out)
@@ -575,7 +636,10 @@ impl BinaryTelemetryReader {
     fn read_all_motion_v1(&self) -> TelemetryResult<Vec<MotionSample>> {
         let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_MOTION) {
+        for entry in index_entries
+            .iter()
+            .filter(|e| e.cluster_id == CLUSTER_MOTION)
+        {
             out.extend(self.read_motion_chunk(entry, bytes)?);
         }
         Ok(out)
@@ -584,7 +648,10 @@ impl BinaryTelemetryReader {
     fn read_all_tyres_v1(&self) -> TelemetryResult<Vec<TyreSample>> {
         let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_TYRES) {
+        for entry in index_entries
+            .iter()
+            .filter(|e| e.cluster_id == CLUSTER_TYRES)
+        {
             out.extend(self.read_tyres_chunk(entry, bytes)?);
         }
         Ok(out)
@@ -593,7 +660,10 @@ impl BinaryTelemetryReader {
     fn read_all_powertrain_v1(&self) -> TelemetryResult<Vec<PowertrainSample>> {
         let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_POWERTRAIN) {
+        for entry in index_entries
+            .iter()
+            .filter(|e| e.cluster_id == CLUSTER_POWERTRAIN)
+        {
             out.extend(self.read_powertrain_chunk(entry, bytes)?);
         }
         Ok(out)
@@ -602,7 +672,10 @@ impl BinaryTelemetryReader {
     fn read_all_car_state_v1(&self) -> TelemetryResult<Vec<CarStateSample>> {
         let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_CAR_STATE) {
+        for entry in index_entries
+            .iter()
+            .filter(|e| e.cluster_id == CLUSTER_CAR_STATE)
+        {
             out.extend(self.read_car_state_chunk(entry, bytes)?);
         }
         Ok(out)
@@ -611,7 +684,10 @@ impl BinaryTelemetryReader {
     fn read_all_other_cars_v1(&self) -> TelemetryResult<Vec<OtherCarsSample>> {
         let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_OTHER_CARS) {
+        for entry in index_entries
+            .iter()
+            .filter(|e| e.cluster_id == CLUSTER_OTHER_CARS)
+        {
             out.extend(self.read_other_cars_chunk(entry, bytes)?);
         }
         Ok(out)
@@ -620,54 +696,94 @@ impl BinaryTelemetryReader {
     /// Helper: extract V1 data references (panics if called on V2).
     fn v1_data(&self) -> TelemetryResult<(&[IndexEntry], &[u8])> {
         match &self.inner {
-            InnerReader::V1 { index_entries, bytes, .. } => Ok((index_entries, bytes)),
+            InnerReader::V1 {
+                index_entries,
+                bytes,
+                ..
+            } => Ok((index_entries, bytes)),
             InnerReader::V2(_) => Err(TelemetryError::InvalidFormat(
                 "v1-only operation called on v2 reader".to_string(),
             )),
         }
     }
 
-    fn read_controls_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<ControlSample>> {
+    fn read_controls_chunk(
+        &self,
+        entry: &IndexEntry,
+        bytes: &[u8],
+    ) -> TelemetryResult<Vec<ControlSample>> {
         let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_CONTROLS)?;
         decode_controls_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_session_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<SessionSample>> {
+    fn read_session_chunk(
+        &self,
+        entry: &IndexEntry,
+        bytes: &[u8],
+    ) -> TelemetryResult<Vec<SessionSample>> {
         let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_SESSION)?;
         decode_session_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_timing_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<TimingSample>> {
+    fn read_timing_chunk(
+        &self,
+        entry: &IndexEntry,
+        bytes: &[u8],
+    ) -> TelemetryResult<Vec<TimingSample>> {
         let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_TIMING)?;
         decode_timing_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_environment_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<EnvironmentSample>> {
+    fn read_environment_chunk(
+        &self,
+        entry: &IndexEntry,
+        bytes: &[u8],
+    ) -> TelemetryResult<Vec<EnvironmentSample>> {
         let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_ENVIRONMENT)?;
         decode_environment_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_motion_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<MotionSample>> {
+    fn read_motion_chunk(
+        &self,
+        entry: &IndexEntry,
+        bytes: &[u8],
+    ) -> TelemetryResult<Vec<MotionSample>> {
         let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_MOTION)?;
         decode_motion_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_tyres_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<TyreSample>> {
+    fn read_tyres_chunk(
+        &self,
+        entry: &IndexEntry,
+        bytes: &[u8],
+    ) -> TelemetryResult<Vec<TyreSample>> {
         let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_TYRES)?;
         decode_tyres_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_powertrain_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<PowertrainSample>> {
+    fn read_powertrain_chunk(
+        &self,
+        entry: &IndexEntry,
+        bytes: &[u8],
+    ) -> TelemetryResult<Vec<PowertrainSample>> {
         let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_POWERTRAIN)?;
         decode_powertrain_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_car_state_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<CarStateSample>> {
+    fn read_car_state_chunk(
+        &self,
+        entry: &IndexEntry,
+        bytes: &[u8],
+    ) -> TelemetryResult<Vec<CarStateSample>> {
         let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_CAR_STATE)?;
         decode_car_state_payload(payload, &columns, header.sample_count as usize)
     }
 
-    fn read_other_cars_chunk(&self, entry: &IndexEntry, bytes: &[u8]) -> TelemetryResult<Vec<OtherCarsSample>> {
+    fn read_other_cars_chunk(
+        &self,
+        entry: &IndexEntry,
+        bytes: &[u8],
+    ) -> TelemetryResult<Vec<OtherCarsSample>> {
         let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_OTHER_CARS)?;
         decode_other_cars_payload(payload, &columns, header.sample_count as usize)
     }
@@ -676,7 +792,10 @@ impl BinaryTelemetryReader {
     fn read_lap_boundary_data_v1(&self) -> TelemetryResult<Vec<(u64, f32, i32)>> {
         let (index_entries, bytes) = self.v1_data()?;
         let mut out = Vec::new();
-        for entry in index_entries.iter().filter(|e| e.cluster_id == CLUSTER_SESSION) {
+        for entry in index_entries
+            .iter()
+            .filter(|e| e.cluster_id == CLUSTER_SESSION)
+        {
             let (header, columns, payload) = read_chunk_raw(entry, bytes, CLUSTER_SESSION)?;
             let count = header.sample_count as usize;
             let ticks = read_u64_column(payload, &columns, COL_SAMPLE_TICK, count)?;
@@ -741,7 +860,9 @@ fn decode_metadata(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
     let mut magic = [0u8; 4];
     cursor.read_exact(&mut magic)?;
     if magic != META_MAGIC {
-        return Err(TelemetryError::InvalidFormat("bad metadata block".to_string()));
+        return Err(TelemetryError::InvalidFormat(
+            "bad metadata block".to_string(),
+        ));
     }
     let created_unix_ns = read_u64(&mut cursor)?;
     let poll_hz = x1000_to_hz(read_u32(&mut cursor)?);
@@ -755,22 +876,25 @@ fn decode_metadata(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
 
     // extended fields (appended after car for backward compat)
     let remaining = bytes.len().saturating_sub(cursor.position() as usize);
-    let (sm_version, ac_version, number_of_sessions, num_cars) =
-        if remaining >= 12 {
-            // enough bytes for sm_len(2) + ac_len(2) + sessions(4) + num_cars(4)
-            let sm_len = read_u16(&mut cursor).unwrap_or(0) as usize;
-            let ac_len = read_u16(&mut cursor).unwrap_or(0) as usize;
-            let ns = read_i32(&mut cursor).unwrap_or(0);
-            let nc = read_i32(&mut cursor).unwrap_or(0);
-            let mut sm = vec![0u8; sm_len];
-            let mut ac = vec![0u8; ac_len];
-            let _ = cursor.read_exact(&mut sm);
-            let _ = cursor.read_exact(&mut ac);
-            (String::from_utf8_lossy(&sm).into_owned(),
-             String::from_utf8_lossy(&ac).into_owned(), ns, nc)
-        } else {
-(String::new(), String::new(), 0, 0)
-        };
+    let (sm_version, ac_version, number_of_sessions, num_cars) = if remaining >= 12 {
+        // enough bytes for sm_len(2) + ac_len(2) + sessions(4) + num_cars(4)
+        let sm_len = read_u16(&mut cursor).unwrap_or(0) as usize;
+        let ac_len = read_u16(&mut cursor).unwrap_or(0) as usize;
+        let ns = read_i32(&mut cursor).unwrap_or(0);
+        let nc = read_i32(&mut cursor).unwrap_or(0);
+        let mut sm = vec![0u8; sm_len];
+        let mut ac = vec![0u8; ac_len];
+        let _ = cursor.read_exact(&mut sm);
+        let _ = cursor.read_exact(&mut ac);
+        (
+            String::from_utf8_lossy(&sm).into_owned(),
+            String::from_utf8_lossy(&ac).into_owned(),
+            ns,
+            nc,
+        )
+    } else {
+        (String::new(), String::new(), 0, 0)
+    };
 
     // v3 extended static fields (scalar, backwards compatible)
     let (sector_count, max_rpm, max_torque, max_power, max_fuel, penalties_enabled) = {
@@ -779,13 +903,19 @@ fn decode_metadata(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
             let sc = read_i32(&mut cursor).unwrap_or(0);
             let mr = read_i32(&mut cursor).unwrap_or(0);
             let mt = f32::from_le_bytes({
-                let mut b = [0u8;4]; let _ = cursor.read_exact(&mut b); b
+                let mut b = [0u8; 4];
+                let _ = cursor.read_exact(&mut b);
+                b
             });
             let mp = f32::from_le_bytes({
-                let mut b = [0u8;4]; let _ = cursor.read_exact(&mut b); b
+                let mut b = [0u8; 4];
+                let _ = cursor.read_exact(&mut b);
+                b
             });
             let mf = f32::from_le_bytes({
-                let mut b = [0u8;4]; let _ = cursor.read_exact(&mut b); b
+                let mut b = [0u8; 4];
+                let _ = cursor.read_exact(&mut b);
+                b
             });
             let pe = read_i32(&mut cursor).unwrap_or(0);
             (sc, mr, mt, mp, mf, pe)
@@ -797,9 +927,19 @@ fn decode_metadata(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
     Ok(SessionMetadata {
         track_name: String::from_utf8_lossy(&track).into_owned(),
         car_model: String::from_utf8_lossy(&car).into_owned(),
-        created_unix_ns, poll_hz, chunk_rows,
-        sm_version, ac_version, number_of_sessions, num_cars,
-        sector_count, max_rpm, max_torque, max_power, max_fuel, penalties_enabled,
+        created_unix_ns,
+        poll_hz,
+        chunk_rows,
+        sm_version,
+        ac_version,
+        number_of_sessions,
+        num_cars,
+        sector_count,
+        max_rpm,
+        max_torque,
+        max_power,
+        max_fuel,
+        penalties_enabled,
         // v4: raw static page bytes (backward compat)
         raw_static_bytes: {
             let remaining3 = bytes.len().saturating_sub(cursor.position() as usize);
@@ -809,8 +949,12 @@ fn decode_metadata(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
                     let mut raw = vec![0u8; raw_len];
                     let _ = cursor.read_exact(&mut raw);
                     raw
-                } else { Vec::new() }
-            } else { Vec::new() }
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
         },
         // v5: session_type (backward compatible)
         session_type: {
@@ -819,8 +963,12 @@ fn decode_metadata(bytes: &[u8]) -> TelemetryResult<SessionMetadata> {
                 let has = read_i32(&mut cursor).unwrap_or(0);
                 if has != 0 {
                     Some(read_i32(&mut cursor).unwrap_or(0))
-                } else { None }
-            } else { None }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         },
     })
 }
@@ -919,8 +1067,18 @@ fn decode_controls_payload(
     let gear = read_i32_column(payload, columns, COL_GEAR, count)?;
     let rpms = read_i32_column(payload, columns, COL_RPMS, count)?;
     let fuel = read_f32_column(payload, columns, COL_FUEL, count)?;
-    let phys_id = read_i32_column_opt(payload, columns, crate::format::COL_PHYSICS_PACKET_ID, count);
-    let gfx_id = read_i32_column_opt(payload, columns, crate::format::COL_GRAPHICS_PACKET_ID, count);
+    let phys_id = read_i32_column_opt(
+        payload,
+        columns,
+        crate::format::COL_PHYSICS_PACKET_ID,
+        count,
+    );
+    let gfx_id = read_i32_column_opt(
+        payload,
+        columns,
+        crate::format::COL_GRAPHICS_PACKET_ID,
+        count,
+    );
 
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
@@ -957,16 +1115,19 @@ fn decode_session_payload(
     let session_time_left = read_f32_column(payload, columns, COL_SESSION_TIME_LEFT, count)?;
     let number_of_laps = read_i32_column(payload, columns, COL_NUMBER_OF_LAPS, count)?;
     let current_sector_index = read_i32_column(payload, columns, COL_CURRENT_SECTOR_INDEX, count)?;
-    let normalized_car_position = read_f32_column(payload, columns, COL_NORMALIZED_CAR_POSITION, count)?;
+    let normalized_car_position =
+        read_f32_column(payload, columns, COL_NORMALIZED_CAR_POSITION, count)?;
     let is_in_pit = read_i32_column(payload, columns, COL_IS_IN_PIT, count)?;
     let is_in_pit_lane = read_i32_column(payload, columns, COL_IS_IN_PIT_LANE, count)?;
     let mandatory_pit_done = read_i32_column(payload, columns, COL_MANDATORY_PIT_DONE, count)?;
-    let missing_mandatory_pits = read_i32_column(payload, columns, COL_MISSING_MANDATORY_PITS, count)?;
+    let missing_mandatory_pits =
+        read_i32_column(payload, columns, COL_MISSING_MANDATORY_PITS, count)?;
     let penalty_time = read_f32_column(payload, columns, COL_PENALTY_TIME, count)?;
     let penalty_type = read_i32_column(payload, columns, COL_PENALTY_TYPE, count)?;
     let track_status = read_u16_column_array(payload, columns, COL_TRACK_STATUS, count, 33)?;
     let clock = read_f32_column(payload, columns, COL_CLOCK, count)?;
-    let replay_time_multiplier = read_f32_column(payload, columns, COL_REPLAY_TIME_MULTIPLIER, count)?;
+    let replay_time_multiplier =
+        read_f32_column(payload, columns, COL_REPLAY_TIME_MULTIPLIER, count)?;
     let is_valid_lap = read_i32_column(payload, columns, COL_IS_VALID_LAP, count)?;
     let global_yellow = read_i32_column(payload, columns, COL_GLOBAL_YELLOW, count)?;
     let global_yellow1 = read_i32_column(payload, columns, COL_GLOBAL_YELLOW1, count)?;
@@ -1012,10 +1173,10 @@ fn decode_session_payload(
             global_green: global_green[i],
             global_chequered: global_chequered[i],
             global_red: global_red[i],
-gap_ahead_or_tail_value: gap_ahead_or_tail_value[i],
-                flag: flag.as_ref().map(|v| v[i]).unwrap_or(0),
-                gap_behind: gap_behind.as_ref().map(|v| v[i]).unwrap_or(0),
-            });
+            gap_ahead_or_tail_value: gap_ahead_or_tail_value[i],
+            flag: flag.as_ref().map(|v| v[i]).unwrap_or(0),
+            gap_behind: gap_behind.as_ref().map(|v| v[i]).unwrap_or(0),
+        });
     }
     Ok(out)
 }
@@ -1039,13 +1200,17 @@ fn decode_timing_payload(
     let fuel_x_lap = read_f32_column(payload, columns, COL_FUEL_X_LAP, count)?;
     let used_fuel = read_f32_column(payload, columns, COL_USED_FUEL, count)?;
     let distance_traveled = read_f32_column(payload, columns, COL_DISTANCE_TRAVELED, count)?;
-    let current_time_str = read_u16_column_array(payload, columns, COL_CURRENT_TIME_STR, count, 15)?;
+    let current_time_str =
+        read_u16_column_array(payload, columns, COL_CURRENT_TIME_STR, count, 15)?;
     let last_time_str = read_u16_column_array(payload, columns, COL_LAST_TIME_STR, count, 15)?;
     let best_time_str = read_u16_column_array(payload, columns, COL_BEST_TIME_STR, count, 15)?;
     let split_str = read_u16_column_array(payload, columns, COL_SPLIT_STR, count, 15)?;
-    let delta_lap_time_str = read_u16_column_array(payload, columns, COL_DELTA_LAP_TIME_STR, count, 15)?;
-    let estimated_lap_time_str = read_u16_column_array(payload, columns, COL_ESTIMATED_LAP_TIME_STR, count, 15)?;
-    let observed_slot_before_i_split = read_i32_column(payload, columns, COL_OBSERVED_SLOT_BEFORE_I_SPLIT, count)?;
+    let delta_lap_time_str =
+        read_u16_column_array(payload, columns, COL_DELTA_LAP_TIME_STR, count, 15)?;
+    let estimated_lap_time_str =
+        read_u16_column_array(payload, columns, COL_ESTIMATED_LAP_TIME_STR, count, 15)?;
+    let observed_slot_before_i_split =
+        read_i32_column(payload, columns, COL_OBSERVED_SLOT_BEFORE_I_SPLIT, count)?;
 
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
@@ -1090,8 +1255,10 @@ fn decode_environment_payload(
     let wind_direction = read_f32_column(payload, columns, COL_WIND_DIRECTION, count)?;
     let surface_grip = read_f32_column(payload, columns, COL_SURFACE_GRIP, count)?;
     let rain_intensity = read_i32_column(payload, columns, COL_RAIN_INTENSITY, count)?;
-    let rain_intensity_in_10min = read_i32_column(payload, columns, COL_RAIN_INTENSITY_IN_10MIN, count)?;
-    let rain_intensity_in_30min = read_i32_column(payload, columns, COL_RAIN_INTENSITY_IN_30MIN, count)?;
+    let rain_intensity_in_10min =
+        read_i32_column(payload, columns, COL_RAIN_INTENSITY_IN_10MIN, count)?;
+    let rain_intensity_in_30min =
+        read_i32_column(payload, columns, COL_RAIN_INTENSITY_IN_30MIN, count)?;
 
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
@@ -1171,7 +1338,10 @@ fn read_i32_column_opt(
 ) -> Option<Vec<i32>> {
     find_column(columns, id).ok().and_then(|col| {
         column_bytes(payload, col, count, 4).ok().map(|bytes| {
-            bytes.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect()
+            bytes
+                .chunks_exact(4)
+                .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+                .collect()
         })
     })
 }
@@ -1219,25 +1389,33 @@ fn column_bytes<'a>(
 
 fn read_lap_index_if_present(bytes: &[u8], start: u64) -> Vec<LapIndexEntry> {
     let pos = start as usize;
-    if pos + 8 > bytes.len() { return Vec::new(); }
+    if pos + 8 > bytes.len() {
+        return Vec::new();
+    }
     let mut magic = [0u8; 4];
-    magic.copy_from_slice(&bytes[pos..pos+4]);
-    if magic != LAP_INDEX_MAGIC { return Vec::new(); }
-    let count = u32::from_le_bytes(bytes[pos+4..pos+8].try_into().unwrap()) as usize;
-    if count > 1000 { return Vec::new(); } // sanity check
+    magic.copy_from_slice(&bytes[pos..pos + 4]);
+    if magic != LAP_INDEX_MAGIC {
+        return Vec::new();
+    }
+    let count = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+    if count > 1000 {
+        return Vec::new();
+    } // sanity check
     let entry_size = 4 + 8 + 8 + 4 + 4 + 4; // 32 bytes
     let end = pos + 8 + count * entry_size;
-    if end > bytes.len() { return Vec::new(); }
+    if end > bytes.len() {
+        return Vec::new();
+    }
     let mut entries = Vec::with_capacity(count);
     let mut off = pos + 8;
     for _ in 0..count {
         entries.push(LapIndexEntry {
-            lap_number: i32::from_le_bytes(bytes[off..off+4].try_into().unwrap()),
-            start_tick: u64::from_le_bytes(bytes[off+4..off+12].try_into().unwrap()),
-            end_tick: u64::from_le_bytes(bytes[off+12..off+20].try_into().unwrap()),
-            sample_count: u32::from_le_bytes(bytes[off+20..off+24].try_into().unwrap()),
-            is_valid: i32::from_le_bytes(bytes[off+24..off+28].try_into().unwrap()),
-            is_out_lap: i32::from_le_bytes(bytes[off+28..off+32].try_into().unwrap()),
+            lap_number: i32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()),
+            start_tick: u64::from_le_bytes(bytes[off + 4..off + 12].try_into().unwrap()),
+            end_tick: u64::from_le_bytes(bytes[off + 12..off + 20].try_into().unwrap()),
+            sample_count: u32::from_le_bytes(bytes[off + 20..off + 24].try_into().unwrap()),
+            is_valid: i32::from_le_bytes(bytes[off + 24..off + 28].try_into().unwrap()),
+            is_out_lap: i32::from_le_bytes(bytes[off + 28..off + 32].try_into().unwrap()),
         });
         off += entry_size;
     }
@@ -1259,7 +1437,8 @@ fn read_f32_column_array<const N: usize>(
         let mut arr = [0.0f32; N];
         for (j, slot) in arr.iter_mut().enumerate().take(N) {
             let off = start + j * 4;
-            *slot = f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+            *slot =
+                f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
         }
         out.push(arr);
     }
@@ -1277,17 +1456,23 @@ fn decode_motion_payload(
     let velocity = read_f32_column_array::<3>(payload, columns, COL_VELOCITY, count)?;
     let acc_g = read_f32_column_array::<3>(payload, columns, COL_ACC_G, count)?;
     let local_velocity = read_f32_column_array::<3>(payload, columns, COL_LOCAL_VELOCITY, count)?;
-    let local_angular_vel = read_f32_column_array::<3>(payload, columns, COL_LOCAL_ANGULAR_VEL, count)?;
+    let local_angular_vel =
+        read_f32_column_array::<3>(payload, columns, COL_LOCAL_ANGULAR_VEL, count)?;
     let heading = read_f32_column(payload, columns, COL_HEADING, count)?;
     let pitch = read_f32_column(payload, columns, COL_PITCH, count)?;
     let roll = read_f32_column(payload, columns, COL_ROLL, count)?;
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         out.push(MotionSample {
-            sample_tick: ticks[i], timestamp_ns: timestamps[i],
-            velocity: velocity[i], acc_g: acc_g[i],
-            local_velocity: local_velocity[i], local_angular_vel: local_angular_vel[i],
-            heading: heading[i], pitch: pitch[i], roll: roll[i],
+            sample_tick: ticks[i],
+            timestamp_ns: timestamps[i],
+            velocity: velocity[i],
+            acc_g: acc_g[i],
+            local_velocity: local_velocity[i],
+            local_angular_vel: local_angular_vel[i],
+            heading: heading[i],
+            pitch: pitch[i],
+            roll: roll[i],
         });
     }
     Ok(out)
@@ -1304,12 +1489,16 @@ fn decode_tyres_payload(
     let wheel_slip = read_f32_column_array::<4>(payload, columns, COL_WHEEL_SLIP, count)?;
     let wheel_load = read_f32_column_array::<4>(payload, columns, COL_WHEEL_LOAD, count)?;
     let wheels_pressure = read_f32_column_array::<4>(payload, columns, COL_WHEELS_PRESSURE, count)?;
-    let wheel_angular_speed = read_f32_column_array::<4>(payload, columns, COL_WHEEL_ANGULAR_SPEED, count)?;
+    let wheel_angular_speed =
+        read_f32_column_array::<4>(payload, columns, COL_WHEEL_ANGULAR_SPEED, count)?;
     let tyre_wear = read_f32_column_array::<4>(payload, columns, COL_TYRE_WEAR, count)?;
-    let tyre_dirty_level = read_f32_column_array::<4>(payload, columns, COL_TYRE_DIRTY_LEVEL, count)?;
-    let tyre_core_temperature = read_f32_column_array::<4>(payload, columns, COL_TYRE_CORE_TEMPERATURE, count)?;
+    let tyre_dirty_level =
+        read_f32_column_array::<4>(payload, columns, COL_TYRE_DIRTY_LEVEL, count)?;
+    let tyre_core_temperature =
+        read_f32_column_array::<4>(payload, columns, COL_TYRE_CORE_TEMPERATURE, count)?;
     let camber_rad = read_f32_column_array::<4>(payload, columns, COL_CAMBER_RAD, count)?;
-    let suspension_travel = read_f32_column_array::<4>(payload, columns, COL_SUSPENSION_TRAVEL, count)?;
+    let suspension_travel =
+        read_f32_column_array::<4>(payload, columns, COL_SUSPENSION_TRAVEL, count)?;
     let slip_ratio = read_f32_column_array::<4>(payload, columns, COL_SLIP_RATIO, count)?;
     let slip_angle = read_f32_column_array::<4>(payload, columns, COL_SLIP_ANGLE, count)?;
     let tyre_temp_i = read_f32_column_array::<4>(payload, columns, COL_TYRE_TEMP_I, count)?;
@@ -1319,31 +1508,51 @@ fn decode_tyres_payload(
     let mz = read_f32_column_array::<4>(payload, columns, COL_MZ, count)?;
     let fx = read_f32_column_array::<4>(payload, columns, COL_FX, count)?;
     let fy = read_f32_column_array::<4>(payload, columns, COL_FY, count)?;
-    let suspension_damage = read_f32_column_array::<4>(payload, columns, COL_SUSPENSION_DAMAGE, count)?;
+    let suspension_damage =
+        read_f32_column_array::<4>(payload, columns, COL_SUSPENSION_DAMAGE, count)?;
     let brake_temp = read_f32_column_array::<4>(payload, columns, COL_BRAKE_TEMP, count)?;
     let brake_pressure = read_f32_column_array::<4>(payload, columns, COL_BRAKE_PRESSURE, count)?;
     let pad_life = read_f32_column_array::<4>(payload, columns, COL_PAD_LIFE, count)?;
     let disc_life = read_f32_column_array::<4>(payload, columns, COL_DISC_LIFE, count)?;
-    let tyre_contact_point = read_f32_column_array::<12>(payload, columns, COL_TYRE_CONTACT_POINT, count)?;
-    let tyre_contact_normal = read_f32_column_array::<12>(payload, columns, COL_TYRE_CONTACT_NORMAL, count)?;
-    let tyre_contact_heading = read_f32_column_array::<12>(payload, columns, COL_TYRE_CONTACT_HEADING, count)?;
+    let tyre_contact_point =
+        read_f32_column_array::<12>(payload, columns, COL_TYRE_CONTACT_POINT, count)?;
+    let tyre_contact_normal =
+        read_f32_column_array::<12>(payload, columns, COL_TYRE_CONTACT_NORMAL, count)?;
+    let tyre_contact_heading =
+        read_f32_column_array::<12>(payload, columns, COL_TYRE_CONTACT_HEADING, count)?;
     let number_of_tyres_out = read_i32_column(payload, columns, COL_NUMBER_OF_TYRES_OUT, count)?;
     let front_brake_compound = read_i32_column(payload, columns, COL_FRONT_BRAKE_COMPOUND, count)?;
     let rear_brake_compound = read_i32_column(payload, columns, COL_REAR_BRAKE_COMPOUND, count)?;
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         out.push(TyreSample {
-            sample_tick: ticks[i], timestamp_ns: timestamps[i],
-            wheel_slip: wheel_slip[i], wheel_load: wheel_load[i],
-            wheels_pressure: wheels_pressure[i], wheel_angular_speed: wheel_angular_speed[i],
-            tyre_wear: tyre_wear[i], tyre_dirty_level: tyre_dirty_level[i],
-            tyre_core_temperature: tyre_core_temperature[i], camber_rad: camber_rad[i],
-            suspension_travel: suspension_travel[i], slip_ratio: slip_ratio[i],
-            slip_angle: slip_angle[i], tyre_temp_i: tyre_temp_i[i], tyre_temp_m: tyre_temp_m[i],
-            tyre_temp_o: tyre_temp_o[i], tyre_temp: tyre_temp[i], mz: mz[i], fx: fx[i], fy: fy[i],
-            suspension_damage: suspension_damage[i], brake_temp: brake_temp[i],
-            brake_pressure: brake_pressure[i], pad_life: pad_life[i], disc_life: disc_life[i],
-            tyre_contact_point: tyre_contact_point[i], tyre_contact_normal: tyre_contact_normal[i],
+            sample_tick: ticks[i],
+            timestamp_ns: timestamps[i],
+            wheel_slip: wheel_slip[i],
+            wheel_load: wheel_load[i],
+            wheels_pressure: wheels_pressure[i],
+            wheel_angular_speed: wheel_angular_speed[i],
+            tyre_wear: tyre_wear[i],
+            tyre_dirty_level: tyre_dirty_level[i],
+            tyre_core_temperature: tyre_core_temperature[i],
+            camber_rad: camber_rad[i],
+            suspension_travel: suspension_travel[i],
+            slip_ratio: slip_ratio[i],
+            slip_angle: slip_angle[i],
+            tyre_temp_i: tyre_temp_i[i],
+            tyre_temp_m: tyre_temp_m[i],
+            tyre_temp_o: tyre_temp_o[i],
+            tyre_temp: tyre_temp[i],
+            mz: mz[i],
+            fx: fx[i],
+            fy: fy[i],
+            suspension_damage: suspension_damage[i],
+            brake_temp: brake_temp[i],
+            brake_pressure: brake_pressure[i],
+            pad_life: pad_life[i],
+            disc_life: disc_life[i],
+            tyre_contact_point: tyre_contact_point[i],
+            tyre_contact_normal: tyre_contact_normal[i],
             tyre_contact_heading: tyre_contact_heading[i],
             number_of_tyres_out: number_of_tyres_out[i],
             front_brake_compound: front_brake_compound[i],
@@ -1386,17 +1595,30 @@ fn decode_powertrain_payload(
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         out.push(PowertrainSample {
-            sample_tick: ticks[i], timestamp_ns: timestamps[i],
-            turbo_boost: turbo_boost[i], ballast: ballast[i],
-            kers_charge: kers_charge[i], kers_input: kers_input[i],
-            kers_current_kj: kers_current_kj[i], drs: drs[i], tc: tc[i], abs: abs[i],
-            engine_brake: engine_brake[i], ers_recovery_level: ers_recovery_level[i],
-            ers_power_level: ers_power_level[i], ers_heat_charging: ers_heat_charging[i],
-            ers_is_charging: ers_is_charging[i], drs_available: drs_available[i],
-            drs_enabled: drs_enabled[i], tc_in_action: tc_in_action[i],
-            abs_in_action: abs_in_action[i], auto_shifter_on: auto_shifter_on[i],
-            current_max_rpm: current_max_rpm[i], p2p_activations: p2p_activations[i],
-            p2p_status: p2p_status[i], water_temp: water_temp[i],
+            sample_tick: ticks[i],
+            timestamp_ns: timestamps[i],
+            turbo_boost: turbo_boost[i],
+            ballast: ballast[i],
+            kers_charge: kers_charge[i],
+            kers_input: kers_input[i],
+            kers_current_kj: kers_current_kj[i],
+            drs: drs[i],
+            tc: tc[i],
+            abs: abs[i],
+            engine_brake: engine_brake[i],
+            ers_recovery_level: ers_recovery_level[i],
+            ers_power_level: ers_power_level[i],
+            ers_heat_charging: ers_heat_charging[i],
+            ers_is_charging: ers_is_charging[i],
+            drs_available: drs_available[i],
+            drs_enabled: drs_enabled[i],
+            tc_in_action: tc_in_action[i],
+            abs_in_action: abs_in_action[i],
+            auto_shifter_on: auto_shifter_on[i],
+            current_max_rpm: current_max_rpm[i],
+            p2p_activations: p2p_activations[i],
+            p2p_status: p2p_status[i],
+            water_temp: water_temp[i],
         });
     }
     Ok(out)
@@ -1423,22 +1645,30 @@ fn decode_car_state_payload(
     let flashing_lights = read_i32_column(payload, columns, COL_FLASHING_LIGHTS, count)?;
     let lights_stage = read_i32_column(payload, columns, COL_LIGHTS_STAGE, count)?;
     let wiper_lv = read_i32_column(payload, columns, COL_WIPER_LV, count)?;
-    let driver_stint_total_time_left = read_i32_column(payload, columns, COL_DRIVER_STINT_TOTAL_TIME_LEFT, count)?;
-    let driver_stint_time_left = read_i32_column(payload, columns, COL_DRIVER_STINT_TIME_LEFT, count)?;
+    let driver_stint_total_time_left =
+        read_i32_column(payload, columns, COL_DRIVER_STINT_TOTAL_TIME_LEFT, count)?;
+    let driver_stint_time_left =
+        read_i32_column(payload, columns, COL_DRIVER_STINT_TIME_LEFT, count)?;
     let rain_tyres = read_i32_column(payload, columns, COL_RAIN_TYRES, count)?;
     let current_tyre_set = read_i32_column(payload, columns, COL_CURRENT_TYRE_SET, count)?;
     let strategy_tyre_set = read_i32_column(payload, columns, COL_STRATEGY_TYRE_SET, count)?;
     let track_grip_status = read_i32_column(payload, columns, COL_TRACK_GRIP_STATUS, count)?;
-    let tyre_compound_str = read_u16_column_array::<33>(payload, columns, COL_TYRE_COMPOUND_STR, count, 33)?;
+    let tyre_compound_str =
+        read_u16_column_array::<33>(payload, columns, COL_TYRE_COMPOUND_STR, count, 33)?;
     let mfd_tyre_set = read_i32_column(payload, columns, COL_MFD_TYRE_SET, count)?;
     let mfd_fuel_to_add = read_f32_column(payload, columns, COL_MFD_FUEL_TO_ADD, count)?;
-    let mfd_tyre_pressure = read_f32_column_array::<4>(payload, columns, COL_MFD_TYRE_PRESSURE, count)?;
+    let mfd_tyre_pressure =
+        read_f32_column_array::<4>(payload, columns, COL_MFD_TYRE_PRESSURE, count)?;
     let ideal_line_on = read_i32_column(payload, columns, COL_IDEAL_LINE_ON, count)?;
-    let is_setup_menu_visible = read_i32_column(payload, columns, COL_IS_SETUP_MENU_VISIBLE, count)?;
+    let is_setup_menu_visible =
+        read_i32_column(payload, columns, COL_IS_SETUP_MENU_VISIBLE, count)?;
     let main_display_index = read_i32_column(payload, columns, COL_MAIN_DISPLAY_INDEX, count)?;
-    let secondary_display_index = read_i32_column(payload, columns, COL_SECONDARY_DISPLAY_INDEX, count)?;
-    let direction_lights_left = read_i32_column(payload, columns, COL_DIRECTION_LIGHTS_LEFT, count)?;
-    let direction_lights_right = read_i32_column(payload, columns, COL_DIRECTION_LIGHTS_RIGHT, count)?;
+    let secondary_display_index =
+        read_i32_column(payload, columns, COL_SECONDARY_DISPLAY_INDEX, count)?;
+    let direction_lights_left =
+        read_i32_column(payload, columns, COL_DIRECTION_LIGHTS_LEFT, count)?;
+    let direction_lights_right =
+        read_i32_column(payload, columns, COL_DIRECTION_LIGHTS_RIGHT, count)?;
     let tc_level = read_i32_column(payload, columns, COL_TC_LEVEL, count)?;
     let tc_cut = read_i32_column(payload, columns, COL_TC_CUT, count)?;
     let engine_map = read_i32_column(payload, columns, COL_ENGINE_MAP, count)?;
@@ -1453,29 +1683,48 @@ fn decode_car_state_payload(
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         out.push(CarStateSample {
-            sample_tick: ticks[i], timestamp_ns: timestamps[i],
-            car_damage: car_damage[i], pit_limiter_on: pit_limiter_on[i],
-            ride_height: ride_height[i], ignition_on: ignition_on[i],
-            starter_engine_on: starter_engine_on[i], is_engine_running: is_engine_running[i],
-            is_ai_controlled: is_ai_controlled[i], cg_height: cg_height[i],
-            brake_bias: brake_bias[i], rain_lights: rain_lights[i],
-            flashing_lights: flashing_lights[i], lights_stage: lights_stage[i],
-            wiper_lv: wiper_lv[i], driver_stint_total_time_left: driver_stint_total_time_left[i],
-            driver_stint_time_left: driver_stint_time_left[i], rain_tyres: rain_tyres[i],
-            current_tyre_set: current_tyre_set[i], strategy_tyre_set: strategy_tyre_set[i],
-            track_grip_status: track_grip_status[i], tyre_compound_str: tyre_compound_str[i],
-            mfd_tyre_set: mfd_tyre_set[i], mfd_fuel_to_add: mfd_fuel_to_add[i],
-            mfd_tyre_pressure: mfd_tyre_pressure[i], ideal_line_on: ideal_line_on[i],
+            sample_tick: ticks[i],
+            timestamp_ns: timestamps[i],
+            car_damage: car_damage[i],
+            pit_limiter_on: pit_limiter_on[i],
+            ride_height: ride_height[i],
+            ignition_on: ignition_on[i],
+            starter_engine_on: starter_engine_on[i],
+            is_engine_running: is_engine_running[i],
+            is_ai_controlled: is_ai_controlled[i],
+            cg_height: cg_height[i],
+            brake_bias: brake_bias[i],
+            rain_lights: rain_lights[i],
+            flashing_lights: flashing_lights[i],
+            lights_stage: lights_stage[i],
+            wiper_lv: wiper_lv[i],
+            driver_stint_total_time_left: driver_stint_total_time_left[i],
+            driver_stint_time_left: driver_stint_time_left[i],
+            rain_tyres: rain_tyres[i],
+            current_tyre_set: current_tyre_set[i],
+            strategy_tyre_set: strategy_tyre_set[i],
+            track_grip_status: track_grip_status[i],
+            tyre_compound_str: tyre_compound_str[i],
+            mfd_tyre_set: mfd_tyre_set[i],
+            mfd_fuel_to_add: mfd_fuel_to_add[i],
+            mfd_tyre_pressure: mfd_tyre_pressure[i],
+            ideal_line_on: ideal_line_on[i],
             is_setup_menu_visible: is_setup_menu_visible[i],
             main_display_index: main_display_index[i],
             secondary_display_index: secondary_display_index[i],
             direction_lights_left: direction_lights_left[i],
             direction_lights_right: direction_lights_right[i],
-            tc_level: tc_level[i], tc_cut: tc_cut[i], engine_map: engine_map[i],
-            abs_level: abs_level[i], exhaust_temperature: exhaust_temperature[i],
-            final_ff: final_ff[i], performance_meter: performance_meter[i],
-            kerb_vibration: kerb_vibration[i], slip_vibrations: slip_vibrations[i],
-            g_vibrations: g_vibrations[i], abs_vibrations: abs_vibrations[i],
+            tc_level: tc_level[i],
+            tc_cut: tc_cut[i],
+            engine_map: engine_map[i],
+            abs_level: abs_level[i],
+            exhaust_temperature: exhaust_temperature[i],
+            final_ff: final_ff[i],
+            performance_meter: performance_meter[i],
+            kerb_vibration: kerb_vibration[i],
+            slip_vibrations: slip_vibrations[i],
+            g_vibrations: g_vibrations[i],
+            abs_vibrations: abs_vibrations[i],
         });
     }
     Ok(out)
@@ -1501,18 +1750,31 @@ fn decode_other_cars_payload(
         let cs = i * 720;
         for j in 0..180 {
             let off = cs + j * 4;
-            coord_vec.push(f32::from_le_bytes([coord_bytes[off], coord_bytes[off+1], coord_bytes[off+2], coord_bytes[off+3]]));
+            coord_vec.push(f32::from_le_bytes([
+                coord_bytes[off],
+                coord_bytes[off + 1],
+                coord_bytes[off + 2],
+                coord_bytes[off + 3],
+            ]));
         }
         let mut id_vec = Vec::with_capacity(60);
         let is = i * 240;
         for j in 0..60 {
             let off = is + j * 4;
-            id_vec.push(i32::from_le_bytes([id_bytes[off], id_bytes[off+1], id_bytes[off+2], id_bytes[off+3]]));
+            id_vec.push(i32::from_le_bytes([
+                id_bytes[off],
+                id_bytes[off + 1],
+                id_bytes[off + 2],
+                id_bytes[off + 3],
+            ]));
         }
         out.push(OtherCarsSample {
-            sample_tick: ticks[i], timestamp_ns: timestamps[i],
-            active_cars: active_cars[i], player_car_id: player_car_id[i],
-            car_coordinates: coord_vec, car_id: id_vec,
+            sample_tick: ticks[i],
+            timestamp_ns: timestamps[i],
+            active_cars: active_cars[i],
+            player_car_id: player_car_id[i],
+            car_coordinates: coord_vec,
+            car_id: id_vec,
         });
     }
     Ok(out)

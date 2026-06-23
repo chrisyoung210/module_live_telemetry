@@ -3,11 +3,9 @@
 //! Creates a v1 .acctlm file from deterministic test frames,
 //! runs the converter binary, then verifies v2 roundtrip.
 
-use module_live_telemetry::{
-    LiveTelemetryConfig, TelemetryFrame, TelemetryResult,
-};
 use module_live_telemetry::reader_v2::BinaryTelemetryReaderV2;
 use module_live_telemetry::writer::BinaryTelemetryWriter;
+use module_live_telemetry::{LiveTelemetryConfig, TelemetryFrame, TelemetryResult};
 use std::process::Command;
 
 mod test_data;
@@ -96,7 +94,8 @@ fn test_converter_roundtrip() -> TelemetryResult<()> {
     let v2_frames = v2_reader.read_all_frames()?;
 
     assert_eq!(
-        v2_frames.len(), n,
+        v2_frames.len(),
+        n,
         "frame count mismatch: expected {n}, got {}",
         v2_frames.len()
     );
@@ -124,9 +123,12 @@ fn test_converter_roundtrip() -> TelemetryResult<()> {
             if mismatches <= 3 {
                 eprintln!(
                     "  mismatch at frame {i}: tick {}/{} ts {}/{} speed {}/{}",
-                    f1.sample_tick, f2.sample_tick,
-                    f1.timestamp_ns, f2.timestamp_ns,
-                    f1.controls.speed_kmh, f2.controls.speed_kmh,
+                    f1.sample_tick,
+                    f2.sample_tick,
+                    f1.timestamp_ns,
+                    f2.timestamp_ns,
+                    f1.controls.speed_kmh,
+                    f2.controls.speed_kmh,
                 );
             }
         }
@@ -264,7 +266,11 @@ fn test_converter_output_path_derivation() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     // Should fail (not a real v1 file) but should mention the derived path
-    assert!(stderr.contains("test_derive.acctlm2") || stderr.contains("failed to open") || stderr.contains("invalid format"));
+    assert!(
+        stderr.contains("test_derive.acctlm2")
+            || stderr.contains("failed to open")
+            || stderr.contains("invalid format")
+    );
 
     let _ = std::fs::remove_file(&input);
     let _ = std::fs::remove_file(&expected);
