@@ -495,3 +495,201 @@ Non-stable implementation details:
 - exact internal JSX structure
 - test-only utility structure
 
+## Dashboard Widget Type Contract (v2)
+
+This section defines the widget type system for dashboard controls. It replaces the old `isDynamic` boolean with an explicit `widgetType` enum and adds contracts for `chart` and `map` widgets. All types referenced below are imported from `module_dashboard_protocol/types`.
+
+### 1. WidgetType Support
+
+`DashboardControl.widgetType` accepts the following values:
+
+```ts
+type WidgetType = "static" | "text" | "chart" | "map";
+```
+
+- `"static"` — renders the region background image only
+- `"text"` — renders a formatted telemetry value using `telemetryFormat`
+- `"chart"` — renders a multi-field time-series line chart
+- `"map"` — renders a track outline with a car position dot
+
+Old `isDynamic` maps to `widgetType` as follows:
+
+| Old field | Value | Maps to |
+|-----------|-------|---------|
+| `isDynamic` | `true` | `"text"` |
+| `isDynamic` | `false` | `"static"` |
+| absent | — | `"text"` |
+
+When `widgetType` is already present, it takes priority and `isDynamic` is ignored.
+
+### 2. Chart Widget Contract
+
+A chart widget displays one or more telemetry fields as overlayed line charts over a fixed time window.
+
+**Control fields:**
+
+```ts
+chartFields: ChartFieldConfig[];
+chartWindowS: number;
+```
+
+`ChartFieldConfig` shape (from `module_dashboard_protocol`):
+
+```ts
+interface ChartFieldConfig {
+  fieldName: string;
+  color: string;
+  label: string;
+}
+```
+
+**Rendering contract:**
+
+- Canvas 2D line chart
+- Y axis range is fixed to `0`–`1`
+- Multiple fields are drawn as overlaid polylines, each with its own color
+- Data is presented as a ring buffer: only points inside `chartWindowS` seconds are visible
+- If no data is available, the widget shows "No data"
+
+**Props injection:**
+
+The main module injects history data through props. The renderer receives:
+
+```ts
+history: FieldHistory[];
+
+interface FieldHistory {
+  field_name: string;
+  points: { t: number; v: number }[];
+}
+```
+
+The chart widget **must not** call Tauri `invoke` to fetch history. All data arrives through the `history` prop.
+
+### 3. Map Widget Contract
+
+A map widget displays a track outline and the current car position.
+
+**Control fields:**
+
+```ts
+trackId: string;
+dotColor: string;
+dotSize: number;
+```
+
+**Rendering contract:**
+
+- Canvas 2D track outline drawn as a polyline
+- Car position shown as a colored dot on the track
+- Aspect ratio is preserved; the track is centered and scaled to fit
+- If no track data is available, the widget shows "No track data"
+
+**Props injection:**
+
+The main module injects track geometry through props:
+
+```ts
+trackPoints: Record<string, { x: number; z: number }[]>;
+```
+
+The map widget looks up its points by `trackId`. It **must not** call Tauri `invoke` to fetch track data.
+
+### 4. DashboardValuesFrame Props
+
+`LocalDashboardOverlay` receives telemetry through `DashboardValuesFrame` instead of the old `LiveFrame`.
+
+**New props:**
+
+```ts
+export interface LocalDashboardOverlayProps {
+  config: LocalDashboardOverlayConfig;
+  containerWidth: number;
+  containerHeight: number;
+  frame: DashboardValuesFrame | null;
+  history: FieldHistory[];
+  trackPoints: Record<string, { x: number; z: number }[]>;
+  gearState?: GearSmootherState;
+  layouts: RegisteredDashboardLayout[];
+  visible: boolean;
+}
+```
+
+`DashboardValuesFrame` shape (from `module_dashboard_protocol`):
+
+```ts
+interface DashboardValuesFrame {
+  subscriptionGeneration: number;
+  sampleTick: number;
+  timestampNs: number;
+  values: Record<string, number>;
+}
+```
+
+- `values` is a flat record keyed by telemetry channel id (e.g. `raw:controls.speed_kmh`)
+- `subscriptionGeneration` increments when the subscription set changes
+- Text widgets read their values from `frame.values[control.telemetryField]`
+- Chart widgets read their history from the `history` prop
+- Map widgets read their track from the `trackPoints` prop
+
+### 5. dashboardRenderer widgetType Dispatch
+
+`DynamicDashboardControl` dispatches rendering by `widgetType`:
+
+| `widgetType` | Rendered output | Props passed |
+|--------------|-----------------|--------------|
+| `"static"` | Background image layer only | `control`, `frame` |
+| `"text"` | Text span with formatted value | `control`, `frame`, `gearState?` |
+| `"chart"` | `<ChartWidget>` component | `control`, `history` |
+| `"map"` | `<MapWidget>` component | `control`, `frame`, `trackPoints` |
+
+Each branch receives the control's layout rectangle (`x`, `y`, `width`, `height`) for positioning.
+
+### 6. Data Injection Principle
+
+All data consumed by the local dashboard overlay is injected through React props. Rendering components are **controlled** and do **not** call Tauri `invoke`.
+
+Data flow:
+
+- `frame` — injected by the main module's telemetry polling loop
+- `history` — injected by the main module's chart history buffer
+- `trackPoints` — injected by the main module's track geometry cache
+
+This keeps the overlay module stateless and makes it easy to test in isolation.
+
+### 7. Shared Type Source
+
+All TypeScript types used by this contract are imported from `module_dashboard_protocol/types`:
+
+```ts
+import {
+  DashboardControl,
+  DashboardLayoutPayload,
+  DashboardValuesFrame,
+  WidgetType,
+  ChartFieldConfig,
+  DashboardConditionalRule,
+  normalizeLayoutPayload,
+} from "module_dashboard_protocol/types";
+```
+
+Do not duplicate these definitions inside `module_local_dashboard`. If a type is missing, extend `module_dashboard_protocol` first.
+
+### 8. Backward Compatibility
+
+Layouts stored with the old shape are automatically upgraded at load time.
+
+**Mapping rules:**
+
+- `isDynamic: true` → `widgetType: "text"`
+- `isDynamic: false` → `widgetType: "static"`
+- `staticControls` and `dynamicControls` → merged into a single `controls` array
+
+Use `normalizeLayoutPayload()` from `module_dashboard_protocol` when loading legacy layouts:
+
+```ts
+const payload = normalizeLayoutPayload(rawJson);
+```
+
+After normalization, `payload.controls` contains only `DashboardControl` objects with a valid `widgetType`.
+

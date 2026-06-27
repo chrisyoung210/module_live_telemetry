@@ -48,6 +48,7 @@ fn run() -> TelemetryResult<()> {
         "export-lap-field" => export_lap_field_command(&args),
         "serve" => serve_command(&args),
         "trackmap" => trackmap_command(&args),
+        "strip-prefix" => strip_prefix_command(&args),
         "help" | "--help" | "-h" => {
             print_usage();
             Ok(())
@@ -1764,6 +1765,81 @@ fn trackmap_command(args: &[String]) -> TelemetryResult<()> {
     Ok(())
 }
 
+fn strip_prefix_command(args: &[String]) -> TelemetryResult<()> {
+    let input = required_path(args, "--input")?;
+    let out = optional_path(args, "--out");
+    let seconds = optional_f64(args, "--seconds", 30.0)?;
+
+    if seconds <= 0.0 {
+        return Err(TelemetryError::InvalidArgument(
+            "--seconds must be positive".to_string(),
+        ));
+    }
+
+    let reader = BinaryTelemetryReader::open(&input)?;
+    let metadata = reader.metadata().clone();
+    let frames = reader.read_all_frames()?;
+
+    if frames.is_empty() {
+        return Err(TelemetryError::InvalidFormat(
+            "no frames in file".to_string(),
+        ));
+    }
+
+    let total = frames.len();
+    let first_ts = frames[0].timestamp_ns;
+    let cutoff_ns = first_ts + (seconds * 1_000_000_000.0) as u64;
+
+    let keep_frames: Vec<TelemetryFrame> = frames
+        .into_iter()
+        .filter(|f| f.timestamp_ns >= cutoff_ns)
+        .collect();
+
+    let kept = keep_frames.len();
+    let removed = total - kept;
+
+    if kept == 0 {
+        return Err(TelemetryError::InvalidFormat(
+            "no frames remain after stripping prefix".to_string(),
+        ));
+    }
+
+    let output_path = out.unwrap_or_else(|| {
+        let stem = input.file_stem().unwrap_or_default().to_string_lossy();
+        let parent = input.parent().unwrap_or(std::path::Path::new("."));
+        parent.join(format!("{}_stripped.acctlm2", stem))
+    });
+
+    ensure_parent_dir(&output_path)?;
+
+    let config = LiveTelemetryConfig {
+        poll_hz: metadata.poll_hz,
+        chunk_rows: 256,
+    };
+    let mut writer =
+        BinaryTelemetryWriterV2::create_file(&output_path, metadata, config)?;
+    for frame in &keep_frames {
+        writer.write_frame(frame)?;
+    }
+    let _summary = writer.finish()?;
+
+    println!(
+        "stripped prefix: removed {} frames, kept {} / {} (first {:.1}s)",
+        removed,
+        kept,
+        total,
+        seconds
+    );
+    println!(
+        "time range: {:.1}s - {:.1}s",
+        keep_frames[0].timestamp_ns as f64 / 1_000_000_000.0,
+        keep_frames[kept - 1].timestamp_ns as f64 / 1_000_000_000.0,
+    );
+    println!("output: {}", output_path.display());
+
+    Ok(())
+}
+
 fn print_usage() {
     println!(
         "ACC live telemetry\n\n\
@@ -1780,6 +1856,7 @@ parse-raw --input <file> --out <file> [--poll-hz 120] [--chunk-rows 256]\n  \
 build-lap-index --input <file>\n  \
   export-lap-field --input <file> --lap <N> --fields <f1,f2,...> [--out <file>]\n  \
   trackmap --input <file> [--lap <N>] [--out <file>] [--width <px>] [--height <px>]\n  \
+  strip-prefix --input <file> [--out <file>] [--seconds 30]\n  \
   help"
     )
 }
