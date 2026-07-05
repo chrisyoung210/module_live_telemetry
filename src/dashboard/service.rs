@@ -564,6 +564,10 @@ impl DashboardService {
             return;
         }
 
+        // 按依赖关系排序：确保被依赖的 calc item 先于依赖它的 item 计算，
+        // 使得 computed_values 中能拿到依赖项的当帧结果。
+        sort_items_by_dependencies(&mut items_to_compute, &self.registry);
+
         // 逐项计算
         let mut sparse_result = HashMap::new();
         for key in &items_to_compute {
@@ -925,6 +929,78 @@ fn dashboard_kind_for_key(key: &ItemKey) -> DashboardItemKind {
     }
 }
 
+/// 按 calc item 的依赖关系对 `items_to_compute` 做稳定拓扑排序。
+///
+/// 被依赖的项排在前面，确保其结果先写入 `computed_values`，
+/// 使得依赖项能在 `compute()` 中通过 `ctx.computed_values` 读取到。
+///
+/// 无依赖或非 calc 项保持原相对顺序（rank=0）。
+fn sort_items_by_dependencies(items: &mut [ItemKey], registry: &ComputeRegistry) {
+    use std::collections::HashSet;
+
+    let calc_names: HashSet<&str> = items
+        .iter()
+        .filter(|k| k.item_type == ItemType::Calculated)
+        .map(|k| k.name.as_str())
+        .collect();
+
+    if calc_names.is_empty() {
+        return;
+    }
+
+    let mut rank_cache: HashMap<String, usize> = HashMap::new();
+
+    fn compute_rank(
+        name: &str,
+        calc_names: &HashSet<&str>,
+        registry: &ComputeRegistry,
+        cache: &mut HashMap<String, usize>,
+        visiting: &mut HashSet<String>,
+    ) -> usize {
+        if let Some(&rank) = cache.get(name) {
+            return rank;
+        }
+        if visiting.contains(name) {
+            return 0;
+        }
+        visiting.insert(name.to_string());
+
+        let deps = registry.dependencies_of(name);
+        let max_dep_rank = deps
+            .iter()
+            .filter(|d| calc_names.contains(d.as_str()))
+            .map(|d| compute_rank(d, calc_names, registry, cache, visiting))
+            .max()
+            .unwrap_or(0);
+
+        visiting.remove(name);
+        let rank = max_dep_rank + 1;
+        cache.insert(name.to_string(), rank);
+        rank
+    }
+
+    let mut visiting: HashSet<String> = HashSet::new();
+    for k in items.iter() {
+        if k.item_type == ItemType::Calculated {
+            compute_rank(
+                &k.name,
+                &calc_names,
+                registry,
+                &mut rank_cache,
+                &mut visiting,
+            );
+        }
+    }
+
+    items.sort_by_key(|k| {
+        if k.item_type == ItemType::Calculated {
+            *rank_cache.get(&k.name).unwrap_or(&0)
+        } else {
+            0
+        }
+    });
+}
+
 fn reference_source_for_subscription(
     key: &ItemKey,
     provided: Option<ReferenceSource>,
@@ -932,7 +1008,13 @@ fn reference_source_for_subscription(
     if key.item_type == ItemType::Calculated
         && matches!(
             key.name.as_str(),
-            "delta_time_to_session_best_lap" | "delta_time_to_session_best_lap_interpolated"
+            "delta_time_to_session_best_lap"
+                | "delta_time_to_session_best_lap_interpolated"
+                | "predict_lap_time_by_session_best_lap"
+        // TODO: 暂时隐藏 refpoly / centerline / fast 三项
+        //      | "delta_time_to_session_best_lap_refpoly"
+        //      | "delta_time_to_session_best_lap_centerline"
+        //      | "delta_time_to_session_best_lap_fast"
         )
     {
         Some(ReferenceSource::session_best())

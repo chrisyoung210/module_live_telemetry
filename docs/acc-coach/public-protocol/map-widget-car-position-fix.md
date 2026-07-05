@@ -4,16 +4,27 @@
 
 Replay/Live 模式下赛道地图上的红点位置不正确。
 
-## 根因：对车位置做了双重坐标变换
+## 根因
 
-### 数据背景
+### 1. 双重坐标变换（已由 acc-coach 端修复）
 
-`acc-coach` 的 Rust 端 `rotate_track_map` / `flip_track_map` 在用户旋转/翻转赛道时：
+Rust 端 `rotate_track_map` / `flip_track_map` 在用户旋转/翻转赛道时，**已直接变换 points 坐标**，同时更新 `angle_deg`/`flip_x`/`flip_z` 作为记录。DB 中 points 已经是最终坐标。
 
-1. **已直接变换 points 坐标**（如 90° CW：`(x,z) → (z,-x)`，上下翻转：`z → -z`）
-2. **同时更新** `angle_deg` / `flip_x` / `flip_z` 作为记录
+dashboard overlay 的 MapWidget 从已变换的 points 取值后**又用 angleDeg/flipX 做了一次变换**，导致红点跑到错误位置。
 
-因此 **DB 中存储的 points 已经是视觉上的最终坐标**。`angle_deg` / `flip_x` / `flip_z` 是"历史记录"字段，表示曾对 points 做过什么变换。
+### 2. Key 名称不一致（已由 acc-coach 端修复）
+
+- **直播模式**：`carX`/`carZ` 由 `src/dashboard/output.rs` 硬编码写入 frame
+- **录播模式**：`src/recording/writer.rs` 订阅 `calc:car_x`/`calc:car_z`，ACCTLM2 文件中的 key 为 `calc:car_x`/`calc:car_z`
+- **回放时**：frame 里 key 仍为 `calc:car_x`/`calc:car_z`，但别名表不包含这两个 key，导致 `translate_dashboard_frame_values()` 无法将它们映射为 `carX`/`carZ`
+
+**修复**：`src/ipc/mod.rs:translate_dashboard_frame_values()` 新增显式映射：
+```
+calc:car_x → carX
+calc:car_z → carZ
+```
+
+现在不管直播还是回放，`module_local_dashboard` 通过 `poll_dashboard_frame` 拿到的 frame 里 **始终有 `carX` 和 `carZ`**。
 
 ### 当前的渲染逻辑（有问题）
 

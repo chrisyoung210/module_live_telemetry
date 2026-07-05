@@ -15,6 +15,7 @@ use std::fmt;
 pub mod context;
 pub mod items;
 pub mod registry;
+pub mod util;
 
 pub use context::{ComputeContext, RealtimeComputeRequest};
 pub use items::{BatchComputeItem, RealtimeComputeItem};

@@ -1,7 +1,11 @@
 use crate::writer::BinaryTelemetryWriter;
 use crate::writer_v2::BinaryTelemetryWriterV2;
 use crate::{
-    compute::{context::ReferenceSource, items::DeltaTimeToLifeBestLap, ComputeRegistry},
+    compute::{
+        context::ReferenceSource,
+        items::{DeltaTimeToLifeBestLap, DeltaTimeToLifeBestLapInterpolated},
+        ComputeRegistry,
+    },
     dashboard::{
         service::DashboardCommand, service::DashboardService, sink::ChannelSink, spawn_dashboard,
     },
@@ -107,18 +111,18 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
 
         // If reference lap is specified, register and subscribe DeltaTimeToLifeBestLap
         if let Some(ref_path) = ref_lap_path {
+            let ref_source = ReferenceSource {
+                file_path: ref_path.clone(),
+                lap_number: ref_lap_number,
+            };
             match dash_svc
                 .registry_mut()
                 .register_calc_realtime(Box::new(DeltaTimeToLifeBestLap::new()))
             {
                 Ok(()) => {
                     let key = ItemKey::parse("calc:delta_time_to_life_best_lap").unwrap();
-                    let ref_source = ReferenceSource {
-                        file_path: ref_path,
-                        lap_number: ref_lap_number,
-                    };
                     dash_svc
-                        .subscribe(key, Duration::from_millis(100), Some(ref_source))
+                        .subscribe(key, Duration::from_millis(100), Some(ref_source.clone()))
                         .unwrap();
                     println!(
                         "delta_time_to_life_best_lap: reference lap #{} loaded",
@@ -127,6 +131,27 @@ fn record_command(args: &[String]) -> TelemetryResult<()> {
                 }
                 Err(e) => {
                     eprintln!("warning: failed to register delta_time_to_life_best_lap: {e}");
+                }
+            }
+            match dash_svc
+                .registry_mut()
+                .register_calc_realtime(Box::new(DeltaTimeToLifeBestLapInterpolated::new()))
+            {
+                Ok(()) => {
+                    let key =
+                        ItemKey::parse("calc:delta_time_to_life_best_lap_interpolated").unwrap();
+                    dash_svc
+                        .subscribe(key, Duration::from_millis(100), Some(ref_source))
+                        .unwrap();
+                    println!(
+                        "delta_time_to_life_best_lap_interpolated: reference lap #{} loaded",
+                        ref_lap_number
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: failed to register delta_time_to_life_best_lap_interpolated: {e}"
+                    );
                 }
             }
         }
@@ -1623,18 +1648,18 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
 
     // If reference lap is specified, register and subscribe DeltaTimeToLifeBestLap
     if let Some(ref_path) = ref_lap_path {
+        let ref_source = ReferenceSource {
+            file_path: ref_path.clone(),
+            lap_number: ref_lap_number,
+        };
         match dashboard
             .registry_mut()
             .register_calc_realtime(Box::new(DeltaTimeToLifeBestLap::new()))
         {
             Ok(()) => {
                 let key = ItemKey::parse("calc:delta_time_to_life_best_lap").unwrap();
-                let ref_source = ReferenceSource {
-                    file_path: ref_path,
-                    lap_number: ref_lap_number,
-                };
                 dashboard
-                    .subscribe(key, Duration::from_millis(100), Some(ref_source))
+                    .subscribe(key, Duration::from_millis(100), Some(ref_source.clone()))
                     .unwrap();
                 println!(
                     "delta_time_to_life_best_lap: reference lap #{} loaded",
@@ -1643,6 +1668,27 @@ fn serve_command(args: &[String]) -> TelemetryResult<()> {
             }
             Err(e) => {
                 eprintln!("warning: failed to register delta_time_to_life_best_lap: {e}");
+            }
+        }
+        match dashboard
+            .registry_mut()
+            .register_calc_realtime(Box::new(DeltaTimeToLifeBestLapInterpolated::new()))
+        {
+            Ok(()) => {
+                let key =
+                    ItemKey::parse("calc:delta_time_to_life_best_lap_interpolated").unwrap();
+                dashboard
+                    .subscribe(key, Duration::from_millis(100), Some(ref_source))
+                    .unwrap();
+                println!(
+                    "delta_time_to_life_best_lap_interpolated: reference lap #{} loaded",
+                    ref_lap_number
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to register delta_time_to_life_best_lap_interpolated: {e}"
+                );
             }
         }
     } else {

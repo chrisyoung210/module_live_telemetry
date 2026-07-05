@@ -284,7 +284,10 @@ Layout 和资源 **必须走 TCP**，分三步：
     {
       "controlId": "speed",
       "fieldRefs": ["speedKmh"],
-      "refreshHz": 30
+      "refreshHz": 30,
+      "widgetType": "text",
+      "textTemplate": "Speed: {{value}} km/h",
+      "textFormat": "%.1f"
     }
   ],
   "assets": [
@@ -300,6 +303,20 @@ Layout 和资源 **必须走 TCP**，分三步：
 ```
 
 设备收到后应检查哪些 assets 已有缓存，可回复 `alreadyHaveAssets`。
+
+**dynamicControl 字段：**
+
+| 字段 | 类型 | 必需 | 说明 |
+|---|---|---|---|
+| `controlId` | string | 是 | 控件唯一标识 |
+| `fieldRefs` | string[] | 是 | 绑定 telemetry 字段列表 |
+| `refreshHz` | number | 否 | 期望更新频率，默认 30 |
+| `widgetType` | string | 否 | 控件类型：`"text"`、`"chart"`、`"map"`、`"gear"` 等 |
+| `textTemplate` | string | 否 | text widget 的显示模板，支持 `{{value}}` 和 `{{expr:...}}` 表达式 |
+| `textFormat` | string | 否 | text widget 的数值格式化串，如 `"%.1f"`、`"%.0f"` |
+
+`textTemplate` 和 `textFormat` 仅对 `widgetType` 为 `"text"` 的控件有效。
+字段缺失时设备端按 `fieldRefs` 渲染原始值。
 
 **步骤 2: putAssetChunk**
 

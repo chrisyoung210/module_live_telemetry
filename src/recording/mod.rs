@@ -25,8 +25,9 @@
 //!
 //! let ctrl = RecordingController::start(req, status_tx, outcome_tx, None, None)?;
 //! // ... recording runs in background ...
-//! let outcome = outcome_rx.recv()?;
-//! # Ok::<(), module_live_telemetry::TelemetryError>(())
+//! let outcome = outcome_rx.recv()
+//!     .map_err(|e| module_live_telemetry::TelemetryError::InvalidArgument(format!("recv failed: {e}")))?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 pub mod controller;

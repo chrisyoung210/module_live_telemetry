@@ -53,16 +53,28 @@ impl ComputeRegistry {
     pub fn register_builtin_dashboard_items(&mut self) -> ComputeResult<()> {
         use super::items::{
             create_prev_sector_items, create_sector_best_items, CarCoordX, CarCoordZ,
-            DeltaTimeToLifeBestLap,
-            DeltaTimeToSessionBestLap, DeltaTimeToSessionBestLapInterpolated,
+            DeltaTimeToLifeBestLap, DeltaTimeToLifeBestLapInterpolated, DeltaTimeToSessionBestLap,
+            // DeltaTimeToSessionBestCenterline, DeltaTimeToSessionBestFast,
+            DeltaTimeToSessionBestLapInterpolated,
+            // DeltaTimeToSessionBestRefPoly,
+            LapDistance, PredictLapTimeByLifeBestLap, PredictLapTimeBySessionBestLap,
         };
 
         self.register_calc_realtime(Box::new(DeltaTimeToLifeBestLap::new()))?;
+        self.register_calc_realtime(Box::new(DeltaTimeToLifeBestLapInterpolated::new()))?;
         self.register_calc_realtime(Box::new(DeltaTimeToSessionBestLap::new()))?;
         self.register_calc_realtime(Box::new(DeltaTimeToSessionBestLapInterpolated::new()))?;
+        // TODO: 暂时隐藏 RefPoly/Centerline/Fast，待定位 10~20ms 偏差后重新启用
+        // self.register_calc_realtime(Box::new(DeltaTimeToSessionBestRefPoly::new()))?;
+        // self.register_calc_realtime(Box::new(DeltaTimeToSessionBestCenterline::new()))?;
+        // self.register_calc_realtime(Box::new(DeltaTimeToSessionBestFast::new()))?;
+
+        self.register_calc_realtime(Box::new(PredictLapTimeByLifeBestLap::new()))?;
+        self.register_calc_realtime(Box::new(PredictLapTimeBySessionBestLap::new()))?;
 
         self.register_calc_realtime(Box::new(CarCoordX::new()))?;
         self.register_calc_realtime(Box::new(CarCoordZ::new()))?;
+        self.register_calc_realtime(Box::new(LapDistance::new()))?;
 
         let (prev_sector_time, prev_sector_number) = create_prev_sector_items();
         self.register_calc_realtime(Box::new(prev_sector_time))?;
@@ -289,6 +301,18 @@ impl ComputeRegistry {
         names.sort();
         names.dedup();
         names
+    }
+
+    /// 查询指定 calculated 实时计算项的依赖项名称列表。
+    ///
+    /// 返回该 item 通过 `RealtimeComputeItem::dependencies()` 声明的依赖，
+    /// 调用方（如 DashboardService）可据此在同一帧内对计算项做拓扑排序，
+    /// 确保依赖项先于本项计算。
+    pub fn dependencies_of(&self, name: &str) -> Vec<String> {
+        self.realtime_calc
+            .get(name)
+            .map(|item| item.dependencies().iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default()
     }
 }
 
