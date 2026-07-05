@@ -27,7 +27,7 @@ impl ReferenceSource {
     }
 
     pub fn is_session_best(&self) -> bool {
-        self.file_path == PathBuf::from(SESSION_BEST_REFERENCE_PATH) && self.lap_number == 0
+        self.file_path.as_os_str() == SESSION_BEST_REFERENCE_PATH && self.lap_number == 0
     }
 }
 

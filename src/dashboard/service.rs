@@ -21,12 +21,9 @@ use crate::recording::{
 use crate::TelemetryFrame;
 use crossbeam_channel::{Receiver, Select, Sender};
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 /// 运行时动态修改 dashboard 订阅的命令
 pub enum DashboardCommand {
@@ -209,16 +206,8 @@ pub struct DashboardService {
     raw_accessors: HashMap<ItemKey, RawFieldAccessor>,
     /// item_key → 参考圈数据来源（None 表示不需要参考圈）
     reference_sources: HashMap<ItemKey, Option<ReferenceSource>>,
-    /// 是否已经报告过 sink 发送错误（每个 service 实例只报告一次）
-    sink_error_reported: bool,
-    /// Last time each item compute failure was logged, to avoid flooding stderr.
-    last_compute_error_log: HashMap<ItemKey, Instant>,
-    /// Whether each item has emitted at least one successful value.
-    item_has_output: HashMap<ItemKey, bool>,
     /// Total dashboard frames successfully sent to the sink.
     sent_frame_count: u64,
-    /// Temporary sampled CSV trace for investigating dashboard values.
-    debug_trace: DashboardDebugTrace,
     stats: DashboardServiceStatsHandle,
     subscription_generation: DashboardSubscriptionGeneration,
 }
@@ -241,11 +230,7 @@ impl DashboardService {
             schedule_buckets: HashMap::new(),
             raw_accessors: HashMap::new(),
             reference_sources: HashMap::new(),
-            sink_error_reported: false,
-            last_compute_error_log: HashMap::new(),
-            item_has_output: HashMap::new(),
             sent_frame_count: 0,
-            debug_trace: DashboardDebugTrace::from_env(),
             stats,
             subscription_generation: 0,
         }
@@ -293,17 +278,9 @@ impl DashboardService {
                 self.raw_accessors.insert(key.clone(), accessor);
             }
         }
-        let has_reference_source = reference_source.is_some();
         self.reference_sources.insert(key.clone(), reference_source);
-        self.item_has_output.insert(key.clone(), false);
         self.rebuild_schedule_buckets();
         self.advance_subscription_generation();
-        eprintln!(
-            "dashboard: subscribed '{}' interval={}ms reference_source={}",
-            key,
-            interval.as_millis(),
-            has_reference_source
-        );
         Ok(())
     }
 
@@ -314,11 +291,8 @@ impl DashboardService {
         }
         self.raw_accessors.remove(key);
         self.reference_sources.remove(key);
-        self.last_compute_error_log.remove(key);
-        self.item_has_output.remove(key);
         self.rebuild_schedule_buckets();
         self.advance_subscription_generation();
-        eprintln!("dashboard: unsubscribed '{}'", key);
     }
 
     /// 获取当前订阅数
@@ -345,10 +319,6 @@ impl DashboardService {
         let validation =
             validate_dashboard_subscriptions_with_registry(&subscriptions, &self.registry);
         if let Some(error) = validation.errors.into_iter().next() {
-            eprintln!(
-                "dashboard: replace subscriptions rejected for '{}': {}",
-                error.item_name, error.message
-            );
             return Err(error);
         }
 
@@ -356,11 +326,8 @@ impl DashboardService {
         self.schedule_buckets.clear();
         self.raw_accessors.clear();
         self.reference_sources.clear();
-        self.last_compute_error_log.clear();
-        self.item_has_output.clear();
         for (key, interval, ref_src) in items {
             let ref_src = reference_source_for_subscription(&key, ref_src);
-            let has_reference_source = ref_src.is_some();
             self.subscriptions.insert(key.clone(), interval);
             if key.item_type == ItemType::Raw {
                 if let Some(accessor) = RawFieldAccessor::compile(&key.name) {
@@ -368,13 +335,6 @@ impl DashboardService {
                 }
             }
             self.reference_sources.insert(key.clone(), ref_src);
-            self.item_has_output.insert(key.clone(), false);
-            eprintln!(
-                "dashboard: replace subscribed '{}' interval={}ms reference_source={}",
-                key,
-                interval.as_millis(),
-                has_reference_source
-            );
         }
         self.rebuild_schedule_buckets();
         self.stats
@@ -382,10 +342,6 @@ impl DashboardService {
             .subscription_replacements
             .fetch_add(1, Ordering::Relaxed);
         self.advance_subscription_generation();
-        eprintln!(
-            "dashboard: replaced subscriptions total={}",
-            self.subscriptions.len()
-        );
         Ok(self.subscription_generation)
     }
 
@@ -456,10 +412,6 @@ impl DashboardService {
         frame_rx: Receiver<Arc<TelemetryFrame>>,
         cmd_rx: Receiver<DashboardCommand>,
     ) {
-        eprintln!(
-            "dashboard: run loop started subscriptions={}",
-            self.subscriptions.len()
-        );
         loop {
             let mut sel = Select::new();
             let frame_oper = sel.recv(&frame_rx);
@@ -471,7 +423,6 @@ impl DashboardService {
                     if let Ok(frame_arc) = oper.recv(&frame_rx) {
                         self.process_frame(&frame_arc);
                     } else {
-                        eprintln!("dashboard: frame channel closed; stopping run loop");
                         break; // frame channel closed
                     }
                 }
@@ -482,23 +433,13 @@ impl DashboardService {
                             interval,
                             reference_source,
                         }) => {
-                            if let Err(e) =
-                                self.subscribe(item_key.clone(), interval, reference_source)
-                            {
-                                eprintln!("dashboard: cmd subscribe '{}' failed: {e}", item_key);
-                            }
+                            let _ = self.subscribe(item_key.clone(), interval, reference_source);
                         }
                         Ok(DashboardCommand::Unsubscribe(key)) => {
                             self.unsubscribe(&key);
                         }
                         Ok(DashboardCommand::ReplaceAll { items, ack }) => {
                             let result = self.replace_all(items);
-                            if let Err(err) = &result {
-                                eprintln!(
-                                    "dashboard: cmd replace subscriptions failed for '{}': {}",
-                                    err.item_name, err.message
-                                );
-                            }
                             let _ = ack.send(result);
                         }
                         Ok(DashboardCommand::ReplaceReference {
@@ -510,18 +451,15 @@ impl DashboardService {
                             self.replace_reference(source, lap_number, lap_time_ms, frames);
                         }
                         Err(_) => {
-                            eprintln!("dashboard: command channel closed; stopping run loop");
                             break; // cmd channel closed
                         }
                     }
                 }
                 _ => {
-                    eprintln!("dashboard: select returned unexpected operation; stopping run loop");
                     break;
                 }
             }
         }
-        eprintln!("dashboard: run loop stopped");
     }
 
     fn process_frame(&mut self, frame_arc: &Arc<TelemetryFrame>) {
@@ -579,66 +517,35 @@ impl DashboardService {
                         .inner
                         .computed_values
                         .fetch_add(1, Ordering::Relaxed);
-                    if !self.item_has_output.get(key).copied().unwrap_or(false) {
-                        eprintln!(
-                            "dashboard: first value for '{}' sample_tick={} value={:.4}",
-                            key, frame.sample_tick, val
-                        );
-                        self.item_has_output.insert(key.clone(), true);
-                    }
-                    self.last_compute_error_log.remove(key);
                 }
-                Err(err) => {
+                Err(_err) => {
                     self.stats
                         .inner
                         .compute_errors
                         .fetch_add(1, Ordering::Relaxed);
-                    if self.should_log_compute_error(key, now) {
-                        let has_reference_source = self
-                            .reference_sources
-                            .get(key)
-                            .and_then(|source| source.as_ref())
-                            .is_some();
-                        eprintln!(
-                            "dashboard: compute item '{}' failed at sample_tick={} reference_source={}: {err}",
-                            key, frame.sample_tick, has_reference_source
-                        );
-                    }
                 }
             }
         }
 
         if !sparse_result.is_empty() {
-            let value_count = sparse_result.len();
+            let _value_count = sparse_result.len();
             let dashboard_frame = DashboardValuesFrame {
                 subscription_generation: self.subscription_generation,
                 sample_tick: frame.sample_tick,
                 timestamp_ns: frame.timestamp_ns,
                 values: sparse_result,
             };
-            if let Err(err) = self.sink.send(dashboard_frame.clone()) {
+            if self.sink.send(dashboard_frame.clone()).is_err() {
                 self.stats
                     .inner
                     .sink_dropped_frames
                     .fetch_add(1, Ordering::Relaxed);
-                if !self.sink_error_reported {
-                    eprintln!("dashboard sink send failed: {err}; subsequent errors suppressed");
-                    self.sink_error_reported = true;
-                }
             } else {
                 self.sent_frame_count = self.sent_frame_count.saturating_add(1);
                 self.stats
                     .inner
                     .produced_frames
                     .fetch_add(1, Ordering::Relaxed);
-                self.debug_trace
-                    .write_frame(self.sent_frame_count, &dashboard_frame, value_count);
-                if self.sent_frame_count == 1 || self.sent_frame_count.is_multiple_of(1000) {
-                    eprintln!(
-                        "dashboard: sent frame #{} sample_tick={} values={}",
-                        self.sent_frame_count, frame.sample_tick, value_count
-                    );
-                }
             }
         }
         let elapsed_ns = compute_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
@@ -652,33 +559,14 @@ impl DashboardService {
             .fetch_max(elapsed_ns, Ordering::Relaxed);
     }
 
-    fn should_log_compute_error(&mut self, key: &ItemKey, now: Instant) -> bool {
-        const COMPUTE_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(5);
-        match self.last_compute_error_log.get(key).copied() {
-            Some(last) if now.duration_since(last) < COMPUTE_ERROR_LOG_INTERVAL => false,
-            _ => {
-                self.last_compute_error_log.insert(key.clone(), now);
-                true
-            }
-        }
-    }
-
     fn replace_reference(
         &mut self,
         source: ReferenceSource,
-        lap_number: u32,
-        lap_time_ms: i32,
+        _lap_number: u32,
+        _lap_time_ms: i32,
         frames: Vec<TelemetryFrame>,
     ) {
-        let frame_count = frames.len();
         self.registry.replace_reference(source.clone(), frames);
-        eprintln!(
-            "dashboard: replaced reference source='{}' lap={} lap_time_ms={} frames={}",
-            reference_source_label(&source),
-            lap_number,
-            lap_time_ms,
-            frame_count
-        );
     }
 
     /// 按类型分发计算
@@ -703,8 +591,7 @@ impl DashboardService {
                         Err(ComputeError::NoValidData) if source.is_session_best() => {
                             None
                         }
-                        Err(err) => {
-                            eprintln!("dashboard: failed to load reference lap for '{key}': {err}");
+                        Err(_) => {
                             None
                         }
                     }
@@ -774,150 +661,6 @@ impl DashboardService {
         } else {
             false
         }
-    }
-}
-
-struct DashboardDebugTrace {
-    writer: Option<BufWriter<File>>,
-    gap: u64,
-    error_reported: bool,
-}
-
-impl DashboardDebugTrace {
-    fn from_env() -> Self {
-        if trace_disabled() {
-            return Self {
-                writer: None,
-                gap: 0,
-                error_reported: false,
-            };
-        }
-
-        let gap = std::env::var("ACC_DASHBOARD_TRACE_GAP")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(60);
-        let path = std::env::var_os("ACC_DASHBOARD_TRACE_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::temp_dir().join("acc-dashboard-values.csv"));
-
-        match OpenOptions::new().create(true).append(true).open(&path) {
-            Ok(file) => {
-                let needs_header = file.metadata().map(|meta| meta.len() == 0).unwrap_or(false);
-                let mut writer = BufWriter::new(file);
-                if needs_header {
-                    let _ = writeln!(
-                        writer,
-                        "wall_time_ms,sent_frame_count,sample_tick,timestamp_ns,value_count,item,value"
-                    );
-                }
-                eprintln!(
-                    "dashboard trace: writing sampled values path='{}' gap={}",
-                    path.display(),
-                    gap
-                );
-                Self {
-                    writer: Some(writer),
-                    gap,
-                    error_reported: false,
-                }
-            }
-            Err(err) => {
-                eprintln!(
-                    "dashboard trace: failed to open path='{}': {err}",
-                    path.display()
-                );
-                Self {
-                    writer: None,
-                    gap,
-                    error_reported: true,
-                }
-            }
-        }
-    }
-
-    fn write_frame(
-        &mut self,
-        sent_frame_count: u64,
-        frame: &DashboardValuesFrame,
-        value_count: usize,
-    ) {
-        if self.writer.is_none() || self.gap == 0 {
-            return;
-        }
-        if sent_frame_count != 1 && !sent_frame_count.is_multiple_of(self.gap) {
-            return;
-        }
-
-        let result = write_trace_rows(
-            self.writer.as_mut().expect("writer checked above"),
-            sent_frame_count,
-            frame,
-            value_count,
-        );
-        if let Err(err) = result {
-            self.report_write_error(err);
-        }
-    }
-
-    fn report_write_error(&mut self, err: std::io::Error) {
-        if !self.error_reported {
-            eprintln!("dashboard trace: write failed: {err}; disabling trace");
-            self.error_reported = true;
-        }
-        self.writer = None;
-    }
-}
-
-fn write_trace_rows(
-    writer: &mut BufWriter<File>,
-    sent_frame_count: u64,
-    frame: &DashboardValuesFrame,
-    value_count: usize,
-) -> std::io::Result<()> {
-    let wall_time_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
-    if frame.values.is_empty() {
-        writeln!(
-            writer,
-            "{wall_time_ms},{sent_frame_count},{},{},{value_count},,",
-            frame.sample_tick, frame.timestamp_ns
-        )?;
-        return writer.flush();
-    }
-
-    let mut values: Vec<_> = frame.values.iter().collect();
-    values.sort_by_key(|(name, _)| *name);
-    for (item, value) in values {
-        writeln!(
-            writer,
-            "{wall_time_ms},{sent_frame_count},{},{},{value_count},{},{}",
-            frame.sample_tick,
-            frame.timestamp_ns,
-            csv_cell(item),
-            value
-        )?;
-    }
-    writer.flush()
-}
-
-fn trace_disabled() -> bool {
-    std::env::var("ACC_DASHBOARD_TRACE")
-        .map(|value| {
-            let value = value.trim().to_ascii_lowercase();
-            matches!(value.as_str(), "0" | "false" | "off" | "no")
-        })
-        .unwrap_or(false)
-}
-
-fn csv_cell(value: &str) -> String {
-    if value.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", value.replace('"', "\"\""))
-    } else {
-        value.to_string()
     }
 }
 
@@ -1020,14 +763,6 @@ fn reference_source_for_subscription(
         Some(ReferenceSource::session_best())
     } else {
         provided
-    }
-}
-
-fn reference_source_label(source: &ReferenceSource) -> String {
-    if source.is_session_best() {
-        "session_best".to_string()
-    } else {
-        format!("{}#{}", source.file_path.display(), source.lap_number)
     }
 }
 

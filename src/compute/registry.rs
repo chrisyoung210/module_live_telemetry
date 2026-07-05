@@ -10,9 +10,6 @@ use crate::TelemetryFrame;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// 参考圈缓存最大条目数
-const MAX_CACHE_ENTRIES: usize = 4;
-
 /// 计算项注册中心（仅管理 calculated item）
 ///
 /// Raw item 通过 `TelemetryFrame::raw_field_value()` 自动解析，无需注册。
@@ -22,8 +19,12 @@ pub struct ComputeRegistry {
     realtime_calc: HashMap<String, Box<dyn RealtimeComputeItem>>,
     /// calculated 批量计算项（按名称索引）
     batch_calc: HashMap<String, Box<dyn BatchComputeItem>>,
-    /// 已缓存的参考圈数据
-    reference_cache: HashMap<ReferenceSource, Arc<Vec<TelemetryFrame>>>,
+    /// session-best 参考圈（运行时由 replace_reference 注入，对应 ReferenceSource::session_best()）
+    session_best: Option<Arc<Vec<TelemetryFrame>>>,
+    /// life-best 参考圈（由 resolve_reference_lap 从 .acctlm2 文件加载）
+    life_best: Option<Arc<Vec<TelemetryFrame>>>,
+    /// life-best 当前对应的来源（用于判断请求的 source 是否命中已缓存条目）
+    life_best_source: Option<ReferenceSource>,
 }
 
 impl Default for ComputeRegistry {
@@ -38,7 +39,9 @@ impl ComputeRegistry {
         Self {
             realtime_calc: HashMap::new(),
             batch_calc: HashMap::new(),
-            reference_cache: HashMap::new(),
+            session_best: None,
+            life_best: None,
+            life_best_source: None,
         }
     }
 
@@ -64,7 +67,7 @@ impl ComputeRegistry {
         self.register_calc_realtime(Box::new(DeltaTimeToLifeBestLapInterpolated::new()))?;
         self.register_calc_realtime(Box::new(DeltaTimeToSessionBestLap::new()))?;
         self.register_calc_realtime(Box::new(DeltaTimeToSessionBestLapInterpolated::new()))?;
-        // TODO: 暂时隐藏 RefPoly/Centerline/Fast，待定位 10~20ms 偏差后重新启用
+        // TODO: RefPoly/Centerline/Fast 已移入 #[cfg(test)]（items.rs），恢复时需同时取消 #[cfg(test)] 属性与注册注释
         // self.register_calc_realtime(Box::new(DeltaTimeToSessionBestRefPoly::new()))?;
         // self.register_calc_realtime(Box::new(DeltaTimeToSessionBestCenterline::new()))?;
         // self.register_calc_realtime(Box::new(DeltaTimeToSessionBestFast::new()))?;
@@ -180,39 +183,18 @@ impl ComputeRegistry {
         &mut self,
         source: &ReferenceSource,
     ) -> ComputeResult<Arc<Vec<TelemetryFrame>>> {
-        if let Some(arc) = self.reference_cache.get(source) {
-            return Ok(Arc::clone(arc));
-        }
-
         if source.is_session_best() {
-            return Err(ComputeError::NoValidData);
+            return self.session_best.clone().ok_or(ComputeError::NoValidData);
         }
-
-        eprintln!(
-            "compute registry: loading reference lap path='{}' lap={}",
-            source.file_path.display(),
-            source.lap_number
-        );
-        let frames = load_reference_lap_from_file(source)?;
-        let frame_count = frames.len();
-        let arc = Arc::new(frames);
-
-        // Evict if full before inserting
-        if self.reference_cache.len() >= MAX_CACHE_ENTRIES
-            && !self.reference_cache.contains_key(source)
-        {
-            if let Some(key) = self.reference_cache.keys().next().cloned() {
-                self.reference_cache.remove(&key);
+        if self.life_best_source.as_ref() == Some(source) {
+            if let Some(arc) = &self.life_best {
+                return Ok(Arc::clone(arc));
             }
         }
-        self.reference_cache
-            .insert(source.clone(), Arc::clone(&arc));
-        eprintln!(
-            "compute registry: cached reference lap path='{}' lap={} frames={}",
-            source.file_path.display(),
-            source.lap_number,
-            frame_count
-        );
+        let frames = load_reference_lap_from_file(source)?;
+        let arc = Arc::new(frames);
+        self.life_best = Some(Arc::clone(&arc));
+        self.life_best_source = Some(source.clone());
         Ok(arc)
     }
 
@@ -231,48 +213,28 @@ impl ComputeRegistry {
         item.compute_batch(current_lap, reference_lap)
     }
 
-    /// 缓存参考圈数据
+    /// 替换参考圈数据
     ///
-    /// 如果缓存已满（max `MAX_CACHE_ENTRIES`），淘汰一个已有条目后插入新数据。
-    pub fn cache_reference_lap(&mut self, source: ReferenceSource, frames: Vec<TelemetryFrame>) {
-        let frame_count = frames.len();
-        if self.reference_cache.len() >= MAX_CACHE_ENTRIES
-            && !self.reference_cache.contains_key(&source)
-        {
-            // 淘汰一个已有条目（HashMap 无序，任意选择一个）
-            if let Some(key) = self.reference_cache.keys().next().cloned() {
-                self.reference_cache.remove(&key);
-            }
-        }
-        self.reference_cache
-            .insert(source.clone(), Arc::new(frames));
-        eprintln!(
-            "compute registry: cache_reference_lap path='{}' lap={} frames={}",
-            source.file_path.display(),
-            source.lap_number,
-            frame_count
-        );
-    }
-
-    /// 替换参考圈数据（直接覆盖，不清除其他缓存条目）
-    ///
-    /// 与 [`cache_reference_lap`] 不同，此方法不会触发 LRU 淘汰。
-    /// 适用于运行时用更快圈速替换参考圈的场景。
+    /// 按来源分发到 session_best 或 life_best 槽位。
     pub fn replace_reference(&mut self, source: ReferenceSource, frames: Vec<TelemetryFrame>) {
-        let frame_count = frames.len();
-        self.reference_cache
-            .insert(source.clone(), Arc::new(frames));
-        eprintln!(
-            "compute registry: replace_reference path='{}' lap={} frames={}",
-            source.file_path.display(),
-            source.lap_number,
-            frame_count
-        );
+        let arc = Arc::new(frames);
+        if source.is_session_best() {
+            self.session_best = Some(arc);
+        } else {
+            self.life_best = Some(arc);
+            self.life_best_source = Some(source);
+        }
     }
 
     /// 获取已缓存的参考圈数据
     pub fn get_reference_lap(&self, source: &ReferenceSource) -> Option<&[TelemetryFrame]> {
-        self.reference_cache.get(source).map(|v| v.as_slice())
+        if source.is_session_best() {
+            self.session_best.as_ref().map(|v| v.as_slice())
+        } else if self.life_best_source.as_ref() == Some(source) {
+            self.life_best.as_ref().map(|v| v.as_slice())
+        } else {
+            None
+        }
     }
 
     /// 获取 calculated 实时计算项数量
@@ -559,7 +521,7 @@ mod tests {
             lap_number: 3,
         };
         let frames = vec![make_frame(100.0)];
-        registry.cache_reference_lap(source.clone(), frames);
+        registry.replace_reference(source.clone(), frames);
 
         let cached = registry.get_reference_lap(&source).unwrap();
         assert_eq!(cached.len(), 1);

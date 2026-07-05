@@ -84,13 +84,13 @@ fn compute_realtime_item_not_found() {
 }
 
 #[test]
-fn reference_cache_evicts_on_overflow() {
+fn reference_cache_replaces_life_best() {
     let mut registry = ComputeRegistry::new();
     let frame = make_frame(0.0);
 
-    // Fill cache beyond MAX_CACHE_ENTRIES (4)
+    // Replace life_best slot multiple times (each call overwrites)
     for i in 0..6 {
-        registry.cache_reference_lap(
+        registry.replace_reference(
             ReferenceSource {
                 file_path: PathBuf::from(format!("test_{i}.acctlm")),
                 lap_number: 1,
@@ -99,7 +99,7 @@ fn reference_cache_evicts_on_overflow() {
         );
     }
 
-    // Should still hold entries (old ones evicted silently)
+    // Only the last replacement should be stored
     let source = ReferenceSource {
         file_path: PathBuf::from("test_5.acctlm"),
         lap_number: 1,

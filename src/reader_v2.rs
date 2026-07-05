@@ -1779,7 +1779,7 @@ mod tests {
     fn test_reader_open_empty_file_error() {
         let tmp = std::env::temp_dir().join("v2_empty_test.acctlm2");
         let _ = std::fs::remove_file(&tmp);
-        std::fs::write(&tmp, &[]).ok();
+        std::fs::write(&tmp, []).ok();
         let result = BinaryTelemetryReaderV2::open(&tmp);
         assert!(result.is_err());
         let _ = std::fs::remove_file(&tmp);

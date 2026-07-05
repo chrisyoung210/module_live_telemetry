@@ -106,6 +106,7 @@ pub struct RecordingLoopResult {
 /// - Setting up the `TelemetrySource` (real ACC or fake)
 /// - Setting up dashboard consumers before calling (via `dashboard_distributor`)
 /// - Reading `stop_rx` for manual stop signals
+#[allow(clippy::too_many_arguments)]
 pub fn run_recording_loop(
     mut config: RecordingEngineConfig,
     source: &mut impl TelemetrySource,
@@ -131,6 +132,7 @@ pub fn run_recording_loop(
     // Lap completion detection state
     let mut _prev_norm_pos: Option<f32> = None;
     let mut last_completed_laps: Option<u32> = None;
+    let mut lap_completed_count: u32 = 0;
     let mut current_lap_frames: Vec<TelemetryFrame> = Vec::new();
     let mut current_lap_is_valid = true;
     let mut recording_track_name: Option<String> = None;
@@ -295,12 +297,13 @@ pub fn run_recording_loop(
                                 completed_laps,
                                 current_lap_is_valid,
                                 lap_time_ms,
-                                false,
+                                lap_completed_count == 0,
                                 recording_track_name
                                     .clone()
                                     .unwrap_or_else(|| "unknown_track".to_string()),
                                 lap_frames,
                             ));
+                            lap_completed_count += 1;
                             current_lap_is_valid = frame_arc.session.is_valid_lap != 0;
                         } else {
                             current_lap_is_valid &= frame_arc.session.is_valid_lap != 0;
@@ -404,6 +407,7 @@ pub fn run_replay_loop(
 
     // Lap completion detection state (matches run_recording_loop)
     let mut last_completed_laps: Option<u32> = None;
+    let mut lap_completed_count: u32 = 0;
     let mut current_lap_frames: Vec<TelemetryFrame> = Vec::new();
     let mut current_lap_is_valid = true;
     let replay_track_name = source
@@ -461,10 +465,11 @@ pub fn run_replay_loop(
                             completed_laps,
                             current_lap_is_valid,
                             lap_time_ms,
-                            false,
+                            lap_completed_count == 0,
                             replay_track_name.clone(),
                             lap_frames,
                         ));
+                        lap_completed_count += 1;
                         current_lap_is_valid = frame_arc.session.is_valid_lap != 0;
                     } else {
                         current_lap_is_valid &= frame_arc.session.is_valid_lap != 0;
@@ -820,7 +825,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].lap_number, 1);
         assert!(events[0].is_valid);
-        assert!(!events[0].is_out_lap);
+        assert!(events[0].is_out_lap);
         assert_eq!(events[0].lap_time_ms, 90_000);
         assert_eq!(events[0].lap_frames.len(), 2);
         assert_eq!(
@@ -981,7 +986,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].lap_number, 1);
         assert!(events[0].is_valid);
-        assert!(!events[0].is_out_lap);
+        assert!(events[0].is_out_lap);
         assert_eq!(events[0].lap_time_ms, 90_000);
         assert_eq!(events[0].lap_frames.len(), 2);
 

@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn roundtrip_f32_plain() {
-        let values: Vec<f64> = vec![0.0, 1.5, -3.14, f32::MAX as f64, f32::MIN as f64];
+        let values: Vec<f64> = vec![0.0, 1.5, -std::f64::consts::PI, f32::MAX as f64, f32::MIN as f64];
         let (encoded, crc, _min, _max) = encode_column(&values, TYPE_F32, CODEC_PLAIN, 0);
         let decoded = decode_column(&encoded, crc).unwrap();
         // f32 roundtrip loses precision; compare with tolerance
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn roundtrip_f64_plain() {
-        let values: Vec<f64> = vec![0.0, 1.5, -3.14, f64::MAX, f64::MIN, 42.123456789];
+        let values: Vec<f64> = vec![0.0, 1.5, -std::f64::consts::PI, f64::MAX, f64::MIN, 42.123456789];
         let (encoded, crc, _min, _max) = encode_column(&values, TYPE_F64, CODEC_PLAIN, 0);
         let decoded = decode_column(&encoded, crc).unwrap();
         assert_eq!(decoded, values);

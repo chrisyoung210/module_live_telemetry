@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn test_group_count() {
         // Verify all 7 groups exist by collecting unique values
-        let all_groups = vec![
+        let all_groups = [
             GroupId::FrameMeta,
             GroupId::DriverInputs,
             GroupId::VehicleDynamics,

@@ -14,7 +14,11 @@
 //!
 //! See [`crate::item_key::ItemKey`] for the canonical parser.
 
-use crate::compute::{context::ReferenceSource, items::RealtimeComputeItem, ComputeRegistry};
+use crate::compute::{
+    context::ReferenceSource,
+    items::{builtin_requires_reference, RealtimeComputeItem},
+    ComputeRegistry,
+};
 use crate::item_key::{ItemKey, ItemType};
 use crate::TelemetryFrame;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -409,6 +413,13 @@ fn validate_dashboard_subscriptions_with_item_check(
                         message: "calculated item is not registered".to_string(),
                     });
                 }
+                if builtin_requires_reference(&key.name) && item.reference_source.is_none() {
+                    errors.push(DashboardSubscriptionError {
+                        item_name: item.item_name.clone(),
+                        message: "this calculated item requires a reference_source \
+                                  (file path + lap number)".to_string(),
+                    });
+                }
             }
             ItemType::System => {
                 errors.push(DashboardSubscriptionError {
@@ -544,5 +555,52 @@ mod tests {
             DashboardCompactPatch::from_bytes(&bytes[..bytes.len() - 1]),
             Err(DashboardCompactPatchError::Truncated)
         );
+    }
+
+    // ---- P3-1: reference_source validation tests ----
+
+    fn make_subscription(item_name: &str, reference_source: Option<ReferenceSource>) -> DashboardItemSubscription {
+        DashboardItemSubscription {
+            item_name: item_name.to_string(),
+            item_kind: DashboardItemKind::CalculatedItem,
+            interval: Duration::from_millis(50),
+            reference_source,
+        }
+    }
+
+    #[test]
+    fn test_validation_session_best_without_reference_source_is_valid() {
+        let items = vec![
+            make_subscription("calc:delta_time_to_session_best_lap", None),
+            make_subscription("calc:delta_time_to_session_best_lap_interpolated", None),
+            make_subscription("calc:predict_lap_time_by_session_best_lap", None),
+        ];
+        let result = validate_dashboard_subscriptions(&items);
+        assert!(result.valid, "session-best items without explicit reference_source should be valid: {:#?}", result.errors);
+    }
+
+    #[test]
+    fn test_validation_life_best_without_reference_source_is_invalid() {
+        let items = vec![make_subscription("calc:delta_time_to_life_best_lap", None)];
+        let result = validate_dashboard_subscriptions(&items);
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].message.contains("reference_source"),
+            "expected error about missing reference_source, got: {}",
+            result.errors[0].message
+        );
+    }
+
+    #[test]
+    fn test_validation_life_best_with_reference_source_is_valid() {
+        let items = vec![make_subscription(
+            "calc:delta_time_to_life_best_lap",
+            Some(ReferenceSource {
+                file_path: std::path::PathBuf::from("test.acctlm2"),
+                lap_number: 1,
+            }),
+        )];
+        let result = validate_dashboard_subscriptions(&items);
+        assert!(result.valid);
     }
 }

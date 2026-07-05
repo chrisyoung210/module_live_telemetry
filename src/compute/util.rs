@@ -19,6 +19,7 @@ pub fn speed(frame: &TelemetryFrame) -> f32 {
 
 /// Find index of last S/F wrap (position 0.8+ → 0.2-) in reference frames.
 /// Returns 0 if no wrap found.
+#[cfg(test)]
 pub fn find_sf_start(frames: &[TelemetryFrame]) -> usize {
     frames
         .windows(2)
@@ -48,6 +49,7 @@ pub fn sf_cross_time(f0: &TelemetryFrame, f1: &TelemetryFrame) -> f64 {
 }
 
 /// Filter out low-speed (pit/grid) frames. `min_speed` in m/s.
+#[cfg(test)]
 pub fn filter_low_speed(frames: &[TelemetryFrame], min_speed: f32) -> Vec<usize> {
     frames
         .iter()
@@ -170,6 +172,7 @@ pub fn build_inv_table(cum_len: &[f64], t: &[f64]) -> Vec<f64> {
 
 /// Project point (x,z) onto polyline (pts, cum_len). Returns normalized s (0..1 of total_len).
 /// Uses local search around `prev_seg` if provided.
+#[cfg(test)]
 pub fn project_onto_polyline(
     xz: (f32, f32),
     pts: &[(f32, f32)],
@@ -197,6 +200,7 @@ pub fn project_onto_polyline(
     (s / total_len).clamp(0.0, 1.0)
 }
 
+#[cfg(test)]
 fn global_project(xz: (f32, f32), pts: &[(f32, f32)]) -> (usize, f32, f32) {
     let mut best_seg = 0;
     let mut best_ratio = 0.0f32;
@@ -212,6 +216,7 @@ fn global_project(xz: (f32, f32), pts: &[(f32, f32)]) -> (usize, f32, f32) {
     (best_seg, best_ratio, best_dist)
 }
 
+#[cfg(test)]
 fn local_project(xz: (f32, f32), pts: &[(f32, f32)], prev: usize) -> (Option<usize>, f32, f32) {
     let mut best_seg = None;
     let mut best_ratio = 0.0f32;
@@ -229,6 +234,7 @@ fn local_project(xz: (f32, f32), pts: &[(f32, f32)], prev: usize) -> (Option<usi
     (best_seg, best_ratio, best_dist)
 }
 
+#[cfg(test)]
 fn project_point_to_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
     let dx = b.0 - a.0;
     let dz = b.1 - a.1;
@@ -245,6 +251,7 @@ fn project_point_to_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> (f32
 }
 
 /// Median of up to 3 values (ignores NaN).
+#[cfg(test)]
 pub fn median3(window: &[f64; 3], count: usize) -> Option<f64> {
     if count == 0 {
         return None;

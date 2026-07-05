@@ -319,42 +319,17 @@ impl RecordingController {
     /// 可在录制过程中任意时刻调用。如果 dashboard 未启用，命令静默丢弃。
     pub fn add_dashboard_item(&self, item: DashboardItemSubscription) {
         if let Some(ref tx) = self.dash_cmd_tx {
-            let key = match ItemKey::parse(&item.item_name) {
-                Some(k) => k,
-                None => {
-                    eprintln!(
-                        "recording dashboard: add ignored invalid item '{}'",
-                        item.item_name
-                    );
-                    return;
-                }
+            let Some(key) = ItemKey::parse(&item.item_name) else {
+                return;
             };
             if let Ok(mut items) = self.dashboard_items.lock() {
                 items.push(item.clone());
             }
-            match tx.try_send(DashboardCommand::Subscribe {
+            let _ = tx.try_send(DashboardCommand::Subscribe {
                 item_key: key,
                 interval: item.interval,
                 reference_source: item.reference_source,
-            }) {
-                Ok(()) => {
-                    eprintln!(
-                        "recording dashboard: add command sent for '{}' interval={}ms",
-                        item.item_name,
-                        item.interval.as_millis()
-                    );
-                }
-                Err(err) => {
-                    eprintln!(
-                        "recording dashboard: add command failed for '{}': {}",
-                        item.item_name, err
-                    );
-                }
-            }
-        } else {
-            eprintln!(
-                "recording dashboard: add ignored because dashboard command channel is unavailable"
-            );
+            });
         }
     }
 
@@ -364,17 +339,7 @@ impl RecordingController {
             if let Ok(mut items) = self.dashboard_items.lock() {
                 items.retain(|item| ItemKey::parse(&item.item_name).as_ref() != Some(key));
             }
-            match tx.try_send(DashboardCommand::Unsubscribe(key.clone())) {
-                Ok(()) => eprintln!("recording dashboard: remove command sent for '{}'", key),
-                Err(err) => eprintln!(
-                    "recording dashboard: remove command failed for '{}': {}",
-                    key, err
-                ),
-            }
-        } else {
-            eprintln!(
-                "recording dashboard: remove ignored because dashboard command channel is unavailable"
-            );
+            let _ = tx.try_send(DashboardCommand::Unsubscribe(key.clone()));
         }
     }
 
@@ -399,10 +364,6 @@ impl RecordingController {
             &self.dashboard_calculated_items,
         );
         if let Some(error) = validation.errors.into_iter().next() {
-            eprintln!(
-                "recording dashboard: replace validation failed for '{}': {}",
-                error.item_name, error.message
-            );
             return Err(error);
         }
 
@@ -410,10 +371,6 @@ impl RecordingController {
             let mut mapped = Vec::with_capacity(items.len());
             for item in items {
                 let Some(key) = ItemKey::parse(&item.item_name) else {
-                    eprintln!(
-                        "recording dashboard: replace rejected invalid item '{}'",
-                        item.item_name
-                    );
                     return Err(DashboardSubscriptionError {
                         item_name: item.item_name.clone(),
                         message: "item name must use raw:, calc:, or system: prefix".to_string(),
@@ -436,11 +393,6 @@ impl RecordingController {
                     item_name: String::new(),
                     message: format!("dashboard subscription replace ACK failed: {err}"),
                 })??;
-            eprintln!(
-                "recording dashboard: replace applied items={} generation={}",
-                items.len(),
-                generation
-            );
             if let Ok(mut current) = self.dashboard_items.lock() {
                 *current = items.to_vec();
             }
@@ -685,9 +637,7 @@ fn run_replay_holder(
         Some(&lap_completed),
         Some(&status_tx),
     ) {
-        Ok(reason) => {
-            eprintln!("replay holder: finished with {:?}", reason);
-        }
+        Ok(_reason) => {}
         Err(err) => {
             send_status(
                 &status_tx,
@@ -718,31 +668,15 @@ impl SessionBestLapTracker {
 
     fn consider_lap(&mut self, event: &LapCompletedEvent) -> Option<SessionBestLapUpdate> {
         if event.is_out_lap {
-            eprintln!(
-                "recording dashboard: session best skipped out lap lap={}",
-                event.lap_number
-            );
             return None;
         }
         if !event.is_valid {
-            eprintln!(
-                "recording dashboard: session best skipped invalid lap lap={} lap_time_ms={}",
-                event.lap_number, event.lap_time_ms
-            );
             return None;
         }
         if event.lap_time_ms <= 0 {
-            eprintln!(
-                "recording dashboard: session best skipped lap={} invalid lap_time_ms={}",
-                event.lap_number, event.lap_time_ms
-            );
             return None;
         }
         if event.lap_frames.is_empty() {
-            eprintln!(
-                "recording dashboard: session best skipped lap={} with no frames",
-                event.lap_number
-            );
             return None;
         }
 
@@ -751,22 +685,10 @@ impl SessionBestLapTracker {
             .map(|best| event.lap_time_ms < best)
             .unwrap_or(true);
         if !is_new_best {
-            eprintln!(
-                "recording dashboard: session best kept current_best_ms={} candidate_lap={} candidate_ms={}",
-                self.best_lap_time_ms.unwrap_or_default(),
-                event.lap_number,
-                event.lap_time_ms
-            );
             return None;
         }
 
         self.best_lap_time_ms = Some(event.lap_time_ms);
-        eprintln!(
-            "recording dashboard: session best updated lap={} lap_time_ms={} frames={}",
-            event.lap_number,
-            event.lap_time_ms,
-            event.lap_frames.len()
-        );
         Some(SessionBestLapUpdate {
             lap_number: event.lap_number,
             lap_time_ms: event.lap_time_ms,
@@ -784,24 +706,13 @@ fn build_lap_completed_callback(
         if let Ok(mut tracker) = session_best_tracker.lock() {
             if let Some(update) = tracker.consider_lap(&event) {
                 let source = ReferenceSource::session_best();
-                match dash_cmd_tx.try_send(DashboardCommand::ReplaceReference {
+                let _ = dash_cmd_tx.try_send(DashboardCommand::ReplaceReference {
                     source,
                     lap_number: update.lap_number,
                     lap_time_ms: update.lap_time_ms,
                     frames: update.frames,
-                }) {
-                    Ok(()) => eprintln!(
-                        "recording dashboard: session best reference update command sent lap={} lap_time_ms={}",
-                        update.lap_number, update.lap_time_ms
-                    ),
-                    Err(err) => eprintln!(
-                        "recording dashboard: session best reference update command failed lap={} lap_time_ms={}: {}",
-                        update.lap_number, update.lap_time_ms, err
-                    ),
-                }
+                });
             }
-        } else {
-            eprintln!("recording dashboard: session best tracker lock poisoned");
         }
 
         if let Some(cb) = external.as_ref() {
@@ -811,14 +722,8 @@ fn build_lap_completed_callback(
 }
 
 fn reset_session_best_tracker(session_best_tracker: &Arc<Mutex<SessionBestLapTracker>>) {
-    match session_best_tracker.lock() {
-        Ok(mut tracker) => {
-            tracker.reset();
-            eprintln!("recording dashboard: session best tracker reset");
-        }
-        Err(_) => {
-            eprintln!("recording dashboard: session best tracker reset failed: lock poisoned")
-        }
+    if let Ok(mut tracker) = session_best_tracker.lock() {
+        tracker.reset();
     }
 }
 
@@ -841,16 +746,6 @@ fn setup_dashboard_thread(
     dash_cmd_rx: Receiver<DashboardCommand>,
     dash_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 ) -> TelemetryDistributor {
-    eprintln!(
-        "recording dashboard: setup requested initial_items={} custom_realtime_items={} sink={}",
-        request.dashboard_items.len(),
-        request.dashboard_realtime_items.len(),
-        match &dashboard_output {
-            DashboardOutput::Legacy(Some(_)) => "legacy-channel",
-            DashboardOutput::Legacy(None) => "null",
-            DashboardOutput::Latest(_) => "latest-value",
-        }
-    );
     let mut reg = match crate::compute::ComputeRegistry::with_builtin_dashboard_items() {
         Ok(registry) => registry,
         Err(err) => {
@@ -876,17 +771,8 @@ fn setup_dashboard_thread(
                     kind: RecordingErrorKind::Unknown,
                 },
             );
-        } else {
-            eprintln!(
-                "recording dashboard: registered custom realtime calc '{}'",
-                item.name
-            );
         }
     }
-    eprintln!(
-        "recording dashboard: registered calc items={:?}",
-        reg.registered_item_names()
-    );
     let sink: Box<dyn crate::dashboard::sink::DataSink> = match dashboard_output {
         DashboardOutput::Legacy(Some(tx)) => Box::new(crate::dashboard::sink::ChannelSink::new(tx)),
         DashboardOutput::Legacy(None) => Box::new(crate::dashboard::sink::NullSink),
@@ -920,20 +806,12 @@ fn setup_dashboard_thread(
                     kind: RecordingErrorKind::Unknown,
                 },
             );
-        } else {
-            eprintln!(
-                "recording dashboard: initial subscription '{}' interval={}ms reference_source={}",
-                item.item_name,
-                item.interval.as_millis(),
-                item.reference_source.is_some()
-            );
         }
     }
 
     let mut distributor = TelemetryDistributor::new(1);
     let dash_rx = distributor.add_consumer();
     let handle = crate::dashboard::spawn_dashboard(dashboard_service, dash_rx, dash_cmd_rx);
-    eprintln!("recording dashboard: thread spawned");
     if let Ok(mut guard) = dash_handle.lock() {
         *guard = Some(handle);
     }

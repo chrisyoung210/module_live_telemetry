@@ -12,8 +12,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use super::util::player_xz;
+#[cfg(test)]
 use super::util::{
-    build_cum_len, build_inv_table, filter_low_speed, find_sf_start, median3, player_xz,
+    build_cum_len, build_inv_table, filter_low_speed, find_sf_start, median3,
     project_onto_polyline, resample_s_bins, resample_t_bins, speed,
 };
 use super::{ComputeContext, ComputeError, ComputeResult};
@@ -284,6 +286,21 @@ impl RealtimeComputeItem for DeltaTimeToLifeBestLap {
             return Err(ComputeError::InvalidReferenceData);
         }
 
+        let start = reference
+            .windows(2)
+            .enumerate()
+            .filter(|(_, pair)| {
+                pair[1].session.normalized_car_position + 0.5
+                    < pair[0].session.normalized_car_position
+            })
+            .map(|(i, _)| i + 1)
+            .next_back()
+            .unwrap_or(0);
+        let reference = &reference[start..];
+        if reference.is_empty() {
+            return Err(ComputeError::InvalidReferenceData);
+        }
+
         let current_lap = ctx.current_frame.session.completed_laps;
         let current_pos = ctx.current_frame.session.normalized_car_position;
         let current_time = ctx.current_frame.timing.i_current_time as f64;
@@ -304,7 +321,7 @@ impl RealtimeComputeItem for DeltaTimeToLifeBestLap {
                 || current_pos < reference[i + 1].session.normalized_car_position
             {
                 self.index = i;
-                return Ok(ref_time - current_time);
+                return Ok(current_time - ref_time);
             }
         }
 
@@ -489,7 +506,7 @@ impl RealtimeComputeItem for DeltaTimeToSessionBestLap {
                     && w[1].session.normalized_car_position < 0.2
             })
             .map(|(i, _)| i + 1)
-            .last()
+            .next_back()
             .unwrap_or(0);
 
         if search_start == 0 && reference.len() > 1 {
@@ -507,8 +524,7 @@ impl RealtimeComputeItem for DeltaTimeToSessionBestLap {
             return Err(ComputeError::InvalidReferenceData);
         }
 
-        let time_base = reference[search_start].timing.i_current_time as f64;
-        let current_time = ctx.current_frame.timing.i_current_time as f64 - time_base;
+        let current_time = ctx.current_frame.timing.i_current_time as f64;
 
         if self.index < search_start {
             self.index = search_start;
@@ -526,7 +542,7 @@ impl RealtimeComputeItem for DeltaTimeToSessionBestLap {
 
         let mut prev_time = 0.0f64;
         for i in self.index..reference.len() {
-            let ref_time = reference[i].timing.i_current_time as f64 - time_base;
+            let ref_time = reference[i].timing.i_current_time as f64;
             if ref_time < prev_time {
                 break;
             }
@@ -553,18 +569,10 @@ impl RealtimeComputeItem for DeltaTimeToSessionBestLap {
 /// 与 `DeltaTimeToSessionBestLap` 保持独立：该实现会先将参考圈整理成单调的
 /// `(normalized_car_position, i_current_time)` 映射，再在相邻采样点之间线性插值。
 /// 正值表示当前圈落后，负值表示当前圈领先。
+#[derive(Default)]
 pub struct DeltaTimeToSessionBestLapInterpolated {
     reference_signature: Option<(usize, usize, u64, u64)>,
     reference_points: Vec<(f64, f64)>,
-}
-
-impl Default for DeltaTimeToSessionBestLapInterpolated {
-    fn default() -> Self {
-        Self {
-            reference_signature: None,
-            reference_points: Vec::new(),
-        }
-    }
 }
 
 impl DeltaTimeToSessionBestLapInterpolated {
@@ -599,7 +607,7 @@ impl DeltaTimeToSessionBestLapInterpolated {
                     < pair[0].session.normalized_car_position
             })
             .map(|(index, _)| index + 1)
-            .last()
+            .next_back()
             .unwrap_or(0);
 
         for frame in &reference[start..] {
@@ -722,7 +730,7 @@ impl PredictLapTimeBase {
                 pair[1].session.normalized_car_position + 0.5 < pair[0].session.normalized_car_position
             })
             .map(|(index, _)| index + 1)
-            .last()
+            .next_back()
             .unwrap_or(0);
 
         let mut points: Vec<(f64, f64)> = Vec::new();
@@ -877,13 +885,11 @@ impl RealtimeComputeItem for PredictLapTimeBySessionBestLap {
 // ---------------------------------------------------------------------------
 
 /// Number of uniform arc-length bins for quantized lookup tables.
+#[cfg(test)]
 const DELTA_BINS: usize = 65536;
 
-/// Maximum allowed projection distance (metres) before confidence gate triggers.
-#[allow(dead_code)]
-const CONFIDENCE_DIST_M: f32 = 10.0;
-
 /// Minimum speed in m/s (~1.5 km/h) to exclude pit/grid samples from reference.
+#[cfg(test)]
 const MIN_SPEED_FPS: f32 = 0.5;
 
 /// 当前圈相对本 Session 最佳圈的时间差 — s-R 参考折线投影法。
@@ -892,6 +898,7 @@ const MIN_SPEED_FPS: f32 = 0.5;
 /// 折线得到归一化弧长 `s`，查 `t_best[s]` 量化表，`δ = i_current_time − t_best`。
 ///
 /// 无需每赛道预先建表，开箱即用。精度受参考圈走线与当前走线差异限制。
+#[cfg(test)]
 pub struct DeltaTimeToSessionBestRefPoly {
     ref_signature: Option<(usize, usize, u64, u64)>,
     pts: Vec<(f32, f32)>,
@@ -907,6 +914,7 @@ pub struct DeltaTimeToSessionBestRefPoly {
     median_filled: usize,
 }
 
+#[cfg(test)]
 impl Default for DeltaTimeToSessionBestRefPoly {
     fn default() -> Self {
         Self {
@@ -926,6 +934,7 @@ impl Default for DeltaTimeToSessionBestRefPoly {
     }
 }
 
+#[cfg(test)]
 impl DeltaTimeToSessionBestRefPoly {
     pub fn new() -> Self {
         Self::default()
@@ -984,6 +993,7 @@ impl DeltaTimeToSessionBestRefPoly {
     }
 }
 
+#[cfg(test)]
 impl RealtimeComputeItem for DeltaTimeToSessionBestRefPoly {
     fn name(&self) -> &str {
         "delta_time_to_session_best_lap_refpoly"
@@ -1041,6 +1051,7 @@ impl RealtimeComputeItem for DeltaTimeToSessionBestRefPoly {
 /// 单圈走线）。参考圈帧投影到中线得 `s_ref`，再重采样到均匀 s 网格。
 ///
 /// 当前实现：中线 = 参考圈轨迹（同一数据），结构上预留独立中线扩展点。
+#[cfg(test)]
 pub struct DeltaTimeToSessionBestCenterline {
     ref_signature: Option<(usize, usize, u64, u64)>,
     cl_pts: Vec<(f32, f32)>,
@@ -1056,6 +1067,7 @@ pub struct DeltaTimeToSessionBestCenterline {
     median_filled: usize,
 }
 
+#[cfg(test)]
 impl Default for DeltaTimeToSessionBestCenterline {
     fn default() -> Self {
         Self {
@@ -1075,6 +1087,7 @@ impl Default for DeltaTimeToSessionBestCenterline {
     }
 }
 
+#[cfg(test)]
 impl DeltaTimeToSessionBestCenterline {
     pub fn new() -> Self {
         Self::default()
@@ -1131,6 +1144,7 @@ impl DeltaTimeToSessionBestCenterline {
     }
 }
 
+#[cfg(test)]
 impl RealtimeComputeItem for DeltaTimeToSessionBestCenterline {
     fn name(&self) -> &str {
         "delta_time_to_session_best_lap_centerline"
@@ -1183,6 +1197,7 @@ impl RealtimeComputeItem for DeltaTimeToSessionBestCenterline {
 // ---------------------------------------------------------------------------
 
 /// 速度门控混合阈值（m/s），约 36 km/h。
+#[cfg(test)]
 const V_THRESH: f64 = 10.0;
 
 /// 当前圈相对本 Session 最佳圈的时间差 — t 域反向表 + 速度门控混合（可选极速）。
@@ -1192,6 +1207,7 @@ const V_THRESH: f64 = 10.0;
 /// 通过速度权重平滑混合。
 ///
 /// **注意**: 语义在弯道进出口与"同位置时间差"可能差几十 ms。
+#[cfg(test)]
 pub struct DeltaTimeToSessionBestFast {
     ref_signature: Option<(usize, usize, u64, u64)>,
     pts: Vec<(f32, f32)>,
@@ -1208,6 +1224,7 @@ pub struct DeltaTimeToSessionBestFast {
     median_filled: usize,
 }
 
+#[cfg(test)]
 impl Default for DeltaTimeToSessionBestFast {
     fn default() -> Self {
         Self {
@@ -1228,6 +1245,7 @@ impl Default for DeltaTimeToSessionBestFast {
     }
 }
 
+#[cfg(test)]
 impl DeltaTimeToSessionBestFast {
     pub fn new() -> Self {
         Self::default()
@@ -1290,6 +1308,7 @@ impl DeltaTimeToSessionBestFast {
     }
 }
 
+#[cfg(test)]
 impl RealtimeComputeItem for DeltaTimeToSessionBestFast {
     fn name(&self) -> &str {
         "delta_time_to_session_best_lap_fast"
@@ -1357,6 +1376,7 @@ impl RealtimeComputeItem for DeltaTimeToSessionBestFast {
 // ---------------------------------------------------------------------------
 
 /// 赛车世界坐标 X（米），从 other_cars.car_coordinates[0] 提取
+#[derive(Default)]
 pub struct CarCoordX;
 
 impl CarCoordX {
@@ -1378,6 +1398,7 @@ impl RealtimeComputeItem for CarCoordX {
 }
 
 /// 赛车世界坐标 Z（米），从 other_cars.car_coordinates[player_car_id*3+2] 提取
+#[derive(Default)]
 pub struct CarCoordZ;
 
 impl CarCoordZ {
@@ -1616,6 +1637,31 @@ pub fn all_builtin_calculated_items() -> Vec<BuiltinCalcItemEntry> {
     ]
 }
 
+/// 检查指定名称的 builtin calc 项是否为 session-best 类（自动注入 session_best reference）。
+pub fn is_session_best_calc_item(name: &str) -> bool {
+    matches!(
+        name,
+        "delta_time_to_session_best_lap"
+            | "delta_time_to_session_best_lap_interpolated"
+            | "predict_lap_time_by_session_best_lap"
+    )
+}
+
+/// 检查指定名称的 builtin calc 项是否需要参考圈。
+///
+/// 对非 builtin（自定义注册）项返回 `false`，避免误伤。
+/// 注意：session-best 类三项虽然 builtin `requires_reference == true`，
+/// 但运行时由 `reference_source_for_subscription` 自动注入 `session_best`，
+/// 验证时不应要求用户提供。本函数排除这三项。
+pub fn builtin_requires_reference(name: &str) -> bool {
+    if is_session_best_calc_item(name) {
+        return false;
+    }
+    all_builtin_calculated_items()
+        .iter()
+        .any(|e| e.key.name == name && e.requires_reference)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1701,7 +1747,7 @@ mod tests {
         );
         let mut item = DeltaTimeToLifeBestLap::new();
         let delta = item.compute(&ctx).unwrap();
-        assert!((delta + 1000.0).abs() < 1.0);
+        assert!((delta - 1000.0).abs() < 1.0);
     }
 
     #[test]
@@ -1746,13 +1792,84 @@ mod tests {
         );
         let mut item = DeltaTimeToLifeBestLap::new();
         let delta = item.compute(&ctx).unwrap();
-        assert!((delta + 2000.0).abs() < 1.0);
+        assert!((delta - 2000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_delta_time_to_life_best_lap_consistent_sign_with_interpolated() {
+        let reference = vec![
+            make_frame(200.0, 1, 0.0, 0),
+            make_frame(200.0, 1, 0.25, 25000),
+            make_frame(200.0, 1, 0.5, 50000),
+            make_frame(200.0, 1, 0.75, 75000),
+            make_frame(200.0, 1, 1.0, 100000),
+        ];
+        let frame = make_frame(200.0, 1, 0.5, 52000);
+        let values = HashMap::new();
+        let source = crate::compute::context::ReferenceSource {
+            file_path: std::path::PathBuf::from("t.acctlm"),
+            lap_number: 1,
+        };
+        let ctx = ComputeContext::with_reference(&frame, &values, &reference, source.clone());
+
+        let mut life = DeltaTimeToLifeBestLap::new();
+        let delta_life = life.compute(&ctx).unwrap();
+
+        let mut interp = DeltaTimeToLifeBestLapInterpolated::new();
+        let delta_interp = interp.compute(&ctx).unwrap();
+
+        assert!(
+            delta_life.signum() == delta_interp.signum() || delta_life.abs() < 1.0,
+            "life_best ({}) and interpolated ({}) should have the same sign",
+            delta_life,
+            delta_interp
+        );
+        assert!(
+            (delta_life - delta_interp).abs() < 10.0,
+            "life_best ({}) and interpolated ({}) should differ by < 10ms",
+            delta_life,
+            delta_interp
+        );
+    }
+
+    #[test]
+    fn test_delta_time_to_life_best_lap_trims_out_lap() {
+        let reference = vec![
+            make_frame(200.0, 0, 0.0, 90000),
+            make_frame(200.0, 0, 0.5, 95000),
+            make_frame(200.0, 0, 0.95, 99000),
+            make_frame(200.0, 0, 0.02, 0),
+            make_frame(200.0, 1, 0.25, 25000),
+            make_frame(200.0, 1, 0.5, 50000),
+            make_frame(200.0, 1, 0.75, 75000),
+            make_frame(200.0, 1, 1.0, 100000),
+        ];
+        let frame = make_frame(200.0, 1, 0.5, 52000);
+        let values = HashMap::new();
+        let source = crate::compute::context::ReferenceSource {
+            file_path: std::path::PathBuf::from("t.acctlm"),
+            lap_number: 1,
+        };
+        let ctx = ComputeContext::with_reference(&frame, &values, &reference, source.clone());
+
+        let mut life = DeltaTimeToLifeBestLap::new();
+        let delta = life.compute(&ctx).unwrap();
+        assert!((delta - 2000.0).abs() < 1.0, "expected delta ≈ 2000 (current slower by 2000ms), got {delta}");
+
+        let mut interp = DeltaTimeToLifeBestLapInterpolated::new();
+        let delta_interp = interp.compute(&ctx).unwrap();
+        assert!(
+            delta.signum() == delta_interp.signum() || delta.abs() < 1.0,
+            "life_best ({}) and interpolated ({}) should have the same sign after trimming",
+            delta,
+            delta_interp
+        );
     }
 
     #[test]
     fn test_all_builtin_calculated_items() {
         let items = super::all_builtin_calculated_items();
-        // TODO: refpoly/centerline/fast 三项已隐藏，恢复后改回 15
+        // TODO: RefPoly/Centerline/Fast 已移入 #[cfg(test)]，恢复时改回 15
         assert_eq!(items.len(), 14);
 
         let delta = items
